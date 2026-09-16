@@ -1,6 +1,7 @@
 # Studio fork — self-hosted configuration pages
 
-This is a fork of `supabase/supabase` on branch `fork/auth-selfhosted`. It makes Supabase
+This is a fork of `supabase/supabase`, published as the standalone repository
+`Krowli/supabase-full-access` and built from its `main` branch. It makes Supabase
 Studio's configuration pages work on a self-hosted stack, where upstream hides them because there
 is no hosted control plane to save a setting to.
 
@@ -124,7 +125,7 @@ services:                       # the compose file's existing services block
       - GOTRUE_MAILER_TEMPLATE_MAX_AGE=1m
 
   supabase-studio:
-    image: ghcr.io/krowli/studio:<tag>
+    image: ghcr.io/krowli/supabase-full-access-studio:<tag>
     volumes:                    # add to the existing list
       - gotrue-config:/etc/gotrue
       - studio-auth-state:/var/lib/studio
@@ -662,11 +663,14 @@ the page shows can list buckets once the restart is through.
 
 ## Updating from upstream
 
-Two remotes matter here, by role rather than by name. One points at `supabase/supabase`, whose
-default branch is `master`; the other is your fork, `krowli/supabase`, which the publish workflow
-runs from. In the original working clone the upstream repo was `origin` and there was no fork
-remote at all. The convention once you have a fork is the other way round — `origin` is your
-fork and the upstream repo is `upstream` — and that is what the commands below assume.
+This repository is standalone: it is no longer a GitHub fork of `supabase/supabase`, and nothing
+moves between the two on its own. Two remotes matter. `origin` is this repository,
+`https://github.com/Krowli/supabase-full-access.git`, whose `main` branch the publish workflow
+runs from. `upstream` is `https://github.com/supabase/supabase.git`, whose default branch is
+`master`.
+
+Updates are taken **by merge, reviewed by hand**. A merge keeps this repository's history and the
+shas the published images were built from; nothing here is force-pushed.
 
 ```bash
 # One time, if the upstream remote does not exist yet.
@@ -674,33 +678,36 @@ git remote add upstream https://github.com/supabase/supabase.git
 
 git fetch upstream master
 
-# Rebase onto the upstream commit the weekly supabase/studio image was built from,
-# not onto the tip of master.
-git rebase <that-commit> fork/auth-selfhosted
+# Read every conflict before resolving it — the likely spots are listed below.
+# Merging a named upstream commit instead of the tip, such as the one the weekly
+# supabase/studio image was built from, works the same way: git merge <that-commit>.
+git merge upstream/master
 
 npx -y pnpm@11.13.1 --filter studio test
 npx -y pnpm@11.13.1 --filter studio typecheck
 
-git push --force-with-lease origin fork/auth-selfhosted
+git push origin main
 ```
 
-Pushing the branch runs `.github/workflows/studio-fork-publish.yml`, which publishes
-`ghcr.io/krowli/studio:latest` and a dated `YYYY.MM.DD-sha-<sha>` tag. Wait for it to go green,
-then change the image tag in Coolify and redeploy.
+The conflicts land in the same few places:
 
-The workflow pushes as `${{ github.actor }}` with the built-in `GITHUB_TOKEN`, so the fork repo
+- `apps/studio/routeTree.gen.ts` is generated. Take upstream's version and regenerate it rather
+  than merging it by hand.
+- `apps/studio/.github/eslint-rule-baselines.json` and `apps/studio/turbo.jsonc` both carry
+  entries this fork added to files upstream keeps editing.
+- The gate edits, since upstream owns every file they sit in: the four in stage 1 and the fifteen
+  in stage 2.
+
+Pushing `main` runs `.github/workflows/studio-fork-publish.yml`, which publishes
+`ghcr.io/krowli/supabase-full-access-studio:latest` and a dated `YYYY.MM.DD-sha-<sha>` tag. Wait
+for it to go green, then change the image tag in Coolify and redeploy.
+
+The workflow pushes as `${{ github.actor }}` with the built-in `GITHUB_TOKEN`, so the repository
 has to live under the `krowli` account for that image path to be writable. Under a different
 owner, change `images:` in the workflow to match, or the push fails with a 403.
 
 The workflow pins the framework, passing `STUDIO_FRAMEWORK=next` as a build-arg rather than
 relying on the default in `apps/studio/Dockerfile`. Upstream owns that default, and this fork
-builds and tests only the Next routes, so the pin is what stops a rebase from quietly switching
+builds and tests only the Next routes, so the pin is what stops a merge from quietly switching
 the published image to the TanStack build. Leave it in place unless you have also built and
 exercised the TanStack variant of the fork's own routes.
-
-Two things to re-check after any rebase that touches auth:
-
-- The gate edits are the ones most likely to conflict, since upstream owns those files: the four
-  in stage 1 and the fifteen in stage 2.
-- `apps/studio/routeTree.gen.ts` is generated. If it conflicts, take upstream's version and
-  regenerate rather than merging by hand.

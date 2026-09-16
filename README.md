@@ -1,3 +1,66 @@
+# Supabase Full Access
+
+A self-hosted build of Supabase Studio in which the pages the upstream image hides outside the
+cloud work against your own containers: Authentication (Sign In / Providers, Emails and SMTP,
+email templates, URL Configuration, Rate Limits, Sessions, Multi-Factor, Attack Protection, Auth
+Hooks, Audit Logs, Performance, OAuth Server, OAuth Apps, Passkeys), Realtime settings, Storage
+settings and S3 access keys, Data API settings, and Connection pooling. A save in the dashboard
+lands in the configuration the running service actually reads — GoTrue's config directory,
+Storage's env file, the Realtime and Supavisor admin APIs, or the `authenticator` role's PostgREST
+settings — rather than in a hosted control plane. Not included: Authentication Overview,
+Third-Party Auth, Backups and point-in-time recovery, Replication, Analytics and Vector buckets,
+and Branching; those are cloud infrastructure rather than hidden pages, and nothing here adds
+them. OAuth Server and OAuth Apps are un-hidden but speak to GoTrue's own admin API, and
+[`FORK.md`](FORK.md) records them as unverified on a live stack.
+
+## Install (Coolify)
+
+1. Deploy the standard **Supabase** service in Coolify and let it come up once.
+2. Open **Configuration → General → Edit Compose File** and apply the changes from
+   [`deploy/coolify/docker-compose.yaml`](deploy/coolify/docker-compose.yaml), or replace the file
+   with it. Pin the Studio image to a tag from the
+   [GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio)
+   instead of leaving it on `latest`.
+3. **Save**, then **Actions → Restart (pull latest)**.
+4. Verify the deployment as [`FORK.md`](FORK.md) describes: `supabase-auth` logs
+   `starting configuration reloader` at boot and `reloading api with new configuration` within
+   about six seconds of a save, and the Authentication, Realtime, Storage and Database settings
+   pages are visible in the dashboard.
+
+One manual step remains afterwards. A Storage settings or S3 access key save writes the file but
+does not apply it — restart the `supabase-storage` service to pick it up. Every other page applies
+its save on its own.
+
+## Install (plain docker compose)
+
+Apply the same service changes to `docker/docker-compose.yml`: the two named volumes, the
+`--config-dir` command on `supabase-auth`, the forked Studio image, and the environment added to
+both services. The mapping, variable by variable, is in [`FORK.md`](FORK.md).
+
+## Image
+
+`ghcr.io/krowli/supabase-full-access-studio:<tag>`, built for `linux/amd64` by
+[`.github/workflows/studio-fork-publish.yml`](.github/workflows/studio-fork-publish.yml) on every
+push to `main`. Each run publishes `latest` and a dated `YYYY.MM.DD-sha-<sha>` tag; pin the dated
+one.
+
+## Updating from upstream
+
+This repository is standalone, so upstream changes arrive by hand: `git merge upstream/master`
+against `supabase/supabase`, with every conflict reviewed. The procedure, and the three places the
+conflicts land, are in [`FORK.md`](FORK.md#updating-from-upstream).
+
+## Documentation
+
+- [`FORK.md`](FORK.md) — the operator guide: what the fork changes, the compose blocks to paste,
+  how to verify a deployment, and the known limitations.
+- [`deploy/coolify/docker-compose.yaml`](deploy/coolify/docker-compose.yaml) — the Coolify compose
+  file with those changes already applied.
+
+---
+
+The upstream README follows.
+
 <p align="center">
 <img src="https://user-images.githubusercontent.com/8291514/213727234-cda046d6-28c6-491a-b284-b86c5cede25d.png#gh-light-mode-only">
 <img src="https://user-images.githubusercontent.com/8291514/213727225-56186826-bee8-43b5-9b15-86e839d89393.png#gh-dark-mode-only">
