@@ -8,7 +8,7 @@ name: Publish Studio (fork)
 on:
   push:
     branches:
-      - fork/auth-selfhosted
+      - main
   workflow_dispatch:
 
 permissions:
@@ -41,7 +41,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/krowli/studio
+          images: ghcr.io/krowli/supabase-full-access-studio
           tags: |
             type=sha,prefix={{date 'YYYY.MM.DD'}}-sha-
             type=raw,value=latest
