@@ -101,10 +101,10 @@ jobs:
             echo "## Incoming commits (newest first, at most 100)"
             git log --no-merges --format='- %h %s' main..upstream/master | head -100
           } > body.md
-          EXISTING=$(gh pr list --head upstream-master --base main --state open --json number --jq '.[0].number')
+          REPO="$GITHUB_REPOSITORY"
+          EXISTING=$(gh api "repos/$REPO/pulls?head=${REPO%%/*}:upstream-master&base=main&state=open" --jq '.[0].number')
           if [ -n "$EXISTING" ]; then
-            gh pr edit "$EXISTING" --title "$TITLE" --body-file body.md
-            echo "Refreshed pull request #$EXISTING"
+            gh api -X PATCH "repos/$REPO/pulls/$EXISTING" -f title="$TITLE" -F body=@body.md --jq '.html_url'
           else
-            gh pr create --head upstream-master --base main --title "$TITLE" --body-file body.md
+            gh api -X POST "repos/$REPO/pulls" -f head=upstream-master -f base=main -f title="$TITLE" -F body=@body.md --jq '.html_url'
           fi
