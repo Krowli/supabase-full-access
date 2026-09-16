@@ -4,7 +4,7 @@ import { NextApiRequest, NextApiResponse } from 'next'
 import { apiWrapper } from '@/lib/api/apiWrapper'
 
 type ValidateSpamBody = components['schemas']['ValidateSpamBody']
-type ValidateSpamResponse = components['schemas']['ValidateSpamResponse']
+type ValidateSpamResponse = components['schemas']['ValidateSpamResponse_Output']
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
