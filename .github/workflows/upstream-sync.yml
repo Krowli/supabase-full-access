@@ -101,11 +101,10 @@ jobs:
             echo "## Incoming commits (newest first, at most 100)"
             git log --no-merges --format='- %h %s' main..upstream/master | head -100
           } > body.md
-          gh label create upstream-sync --color 0E8A16 --description "Automated sync from supabase/supabase" --force >/dev/null 2>&1 || true
           EXISTING=$(gh pr list --head upstream-master --base main --state open --json number --jq '.[0].number')
           if [ -n "$EXISTING" ]; then
             gh pr edit "$EXISTING" --title "$TITLE" --body-file body.md
             echo "Refreshed pull request #$EXISTING"
           else
-            gh pr create --head upstream-master --base main --title "$TITLE" --body-file body.md --label upstream-sync
+            gh pr create --head upstream-master --base main --title "$TITLE" --body-file body.md
           fi
