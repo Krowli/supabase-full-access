@@ -1,0 +1,111 @@
+name: Upstream sync
+
+# Once a day: fetch supabase/supabase master, and if it has commits that
+# `main` does not, mirror it into the branch `upstream-master` and open (or
+# refresh) a pull request `upstream-master` -> `main`. The body says whether
+# the merge is clean or which files conflict, and lists the incoming commits.
+# A person or an agent then resolves, tests and merges; nothing is merged here.
+#
+# Needs the repository secret UPSTREAM_SYNC_TOKEN: a fine-grained personal
+# access token for this repository with Contents: read/write, Pull requests:
+# read/write and Workflows: read/write. The default GITHUB_TOKEN cannot push
+# commits that touch .github/workflows (upstream's do), and pull requests it
+# opens do not trigger other workflows.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the sync token
+        env:
+          TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Secret UPSTREAM_SYNC_TOKEN is missing. Create a fine-grained PAT (Contents RW, Pull requests RW, Workflows RW) and add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+
+      - name: Fetch upstream master
+        run: |
+          git remote add upstream https://github.com/supabase/supabase.git
+          git fetch --no-tags upstream master
+          echo "NEW=$(git rev-list --count main..upstream/master)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_SHA=$(git rev-parse --short upstream/master)" >> "$GITHUB_ENV"
+
+      - name: Nothing new
+        if: env.NEW == '0'
+        run: echo "main already contains upstream/master; no pull request needed."
+
+      - name: Mirror upstream master into the branch upstream-master
+        if: env.NEW != '0'
+        run: git push --force origin upstream/master:refs/heads/upstream-master
+
+      - name: Try the merge and record conflicts
+        if: env.NEW != '0'
+        id: merge
+        run: |
+          git config user.name "upstream-sync"
+          git config user.email "upstream-sync@users.noreply.github.com"
+          if git merge --no-ff --no-edit upstream/master >/dev/null 2>&1; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            git reset -q --hard origin/main
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=U > conflicts.txt
+            git merge --abort
+          fi
+
+      - name: Open or refresh the pull request
+        if: env.NEW != '0'
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          CLEAN: ${{ steps.merge.outputs.clean }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          TITLE="Upstream sync $DATE: $NEW new commits from supabase/supabase"
+          {
+            echo "Automated daily check. Head \`upstream-master\` = supabase/supabase master at \`$UPSTREAM_SHA\`."
+            echo
+            if [ "$CLEAN" = "true" ]; then
+              echo "**Merge into \`main\`: clean** — no conflicts at the time of this check."
+            else
+              echo "**Merge into \`main\`: CONFLICTS** in these files:"
+              echo
+              sed 's/^/- `/; s/$/`/' conflicts.txt
+            fi
+            echo
+            echo "## Before merging"
+            echo "- [ ] Resolve conflicts. Regenerate \`apps/studio/routeTree.gen.ts\` with the generator instead of hand-merging; re-check \`apps/studio/.github/eslint-rule-baselines.json\`, \`apps/studio/turbo.jsonc\` and the gate edits listed in FORK.md."
+            echo "- [ ] \`npx -y pnpm@11.13.1 --filter studio test\` and \`npx -y pnpm@11.13.1 --filter studio typecheck\` are green."
+            echo "- [ ] After merging, wait for the image build on \`main\` and pin the new tag in Coolify."
+            echo
+            echo "## Incoming commits (newest first, at most 100)"
+            git log --no-merges --format='- %h %s' main..upstream/master | head -100
+          } > body.md
+          gh label create upstream-sync --color 0E8A16 --description "Automated sync from supabase/supabase" --force >/dev/null 2>&1 || true
+          EXISTING=$(gh pr list --head upstream-master --base main --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --title "$TITLE" --body-file body.md
+            echo "Refreshed pull request #$EXISTING"
+          else
+            gh pr create --head upstream-master --base main --title "$TITLE" --body-file body.md --label upstream-sync
+          fi

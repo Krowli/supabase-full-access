@@ -711,3 +711,18 @@ relying on the default in `apps/studio/Dockerfile`. Upstream owns that default, 
 builds and tests only the Next routes, so the pin is what stops a merge from quietly switching
 the published image to the TanStack build. Leave it in place unless you have also built and
 exercised the TanStack variant of the fork's own routes.
+
+### The daily check
+
+`.github/workflows/upstream-sync.yml` runs every day at 05:00 UTC (and on demand from the Actions
+tab). It fetches `upstream/master`, and when it holds commits that `main` does not, it force-pushes
+that tip to the branch `upstream-master` and opens a pull request `upstream-master` → `main`, or
+refreshes the one already open. The body says whether a merge into `main` is clean or lists the
+conflicting files, and carries the incoming commits and the checklist above. Nothing is merged by
+the workflow; a person or an agent resolves conflicts on the pull request, runs the studio tests and
+typecheck, and merges. When `main` already contains upstream, the run ends without opening anything.
+
+The workflow needs one secret, `UPSTREAM_SYNC_TOKEN`: a fine-grained personal access token for this
+repository with **Contents**, **Pull requests** and **Workflows** set to read and write. The built-in
+`GITHUB_TOKEN` cannot push commits that touch `.github/workflows`, and upstream's do, so without the
+secret the run stops at its first step with a message saying what is missing.
