@@ -13,23 +13,262 @@ and Branching; those are cloud infrastructure rather than hidden pages, and noth
 them. OAuth Server and OAuth Apps are un-hidden but speak to GoTrue's own admin API, and
 [`FORK.md`](FORK.md) records them as unverified on a live stack.
 
-## Install (Coolify)
+## Install on Coolify
 
-1. Deploy the standard **Supabase** service in Coolify and let it come up once.
-2. Open **Configuration → General → Edit Compose File** and apply the changes from
-   [`deploy/coolify/docker-compose.yaml`](deploy/coolify/docker-compose.yaml), or replace the file
-   with it. Pin the Studio image to a tag from the
-   [GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio)
-   instead of leaving it on `latest`.
-3. **Save**, then **Actions → Restart (pull latest)**.
-4. Verify the deployment as [`FORK.md`](FORK.md) describes: `supabase-auth` logs
-   `starting configuration reloader` at boot and `reloading api with new configuration` within
-   about six seconds of a save, and the Authentication, Realtime, Storage and Database settings
-   pages are visible in the dashboard.
+The fork is one image plus a set of compose edits. Everything else in the Coolify **Supabase**
+service stays as the template created it. Take **path A** if you are creating the service now,
+**path B** if a Supabase service is already running.
 
-One manual step remains afterwards. A Storage settings or S3 access key save writes the file but
-does not apply it — restart the `supabase-storage` service to pick it up. Every other page applies
-its save on its own.
+### A. A new Coolify service
+
+1. In your Coolify project, choose **New resource → Supabase** and create the service.
+2. Open the service, then **Configuration → General → Edit Compose File**.
+3. Replace the entire contents with
+   [`deploy/coolify/docker-compose.yaml`](deploy/coolify/docker-compose.yaml) from this repository.
+   That file is the Coolify template with every fork change already applied.
+4. Pin the Studio image. The file ships `:latest`, which works as is; for production change that
+   one line to a dated tag from the
+   [GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio):
+
+   ```yaml
+       image: 'ghcr.io/krowli/supabase-full-access-studio:YYYY.MM.DD-sha-XXXXXXX'
+   ```
+
+5. **Save**, then deploy the service.
+
+**The variables Coolify generates are kept.** Coolify fills the `${SERVICE_*}` placeholders of a
+service template with values it generates — the Postgres password, the JWT secret, the anon and
+service keys, the dashboard login, the Kong URL. The file above names exactly the same fifteen, so
+none of them has to be re-entered:
+
+```
+SERVICE_PASSWORD_ADMIN, SERVICE_PASSWORD_JWT, SERVICE_PASSWORD_LOGFLARE,
+SERVICE_PASSWORD_LOGFLAREPRIVATE, SERVICE_PASSWORD_MINIO, SERVICE_PASSWORD_PGMETACRYPTO,
+SERVICE_PASSWORD_POSTGRES, SERVICE_PASSWORD_SUPAVISORSECRET, SERVICE_PASSWORD_VAULTENC,
+SERVICE_ROLE_KEY_ASYMMETRIC, SERVICE_SUPABASEANON_KEY, SERVICE_SUPABASESERVICE_KEY,
+SERVICE_URL_SUPABASEKONG, SERVICE_USER_ADMIN, SERVICE_USER_MINIO
+```
+
+One variable name is new against the stock template, `POOLER_PROXY_PORT_TRANSACTION`, and it
+carries its own default of `6543` in the file. Nothing has to be set by hand.
+
+### B. An existing Coolify Supabase service
+
+Open **Configuration → General → Edit Compose File** and make the edits below. They are the whole
+difference between the stock template and this fork, in the order the services appear in the file.
+Nothing else in the compose changes.
+
+#### `supabase-studio` — the image
+
+Replace the studio service's image line. **From** — your template's tag may be a different date:
+
+```yaml
+    image: 'supabase/studio:2026.09.07-sha-7996410'
+```
+
+**To**:
+
+```yaml
+    image: 'ghcr.io/krowli/supabase-full-access-studio:latest'
+```
+
+For production replace `latest` with a dated tag (`YYYY.MM.DD-sha-XXXXXXX`) from the
+[GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio).
+
+While you are in the file: if the `minio-createbucket` service still says `image: minio/mc`, change
+it to `image: 'quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z'`. Docker Hub no longer serves the
+MinIO images, and the deploy fails at pull with `pull access denied for minio/mc`.
+
+#### `supabase-studio` — environment
+
+Append to the service's existing `environment:` list:
+
+```yaml
+      - STUDIO_INTERNAL_URL=http://supabase-studio:3000
+      - GOTRUE_CONFIG_DIR=/etc/gotrue
+      - STUDIO_AUTH_STATE_DIR=/var/lib/studio
+      - 'GOTRUE_SITE_URL=${GOTRUE_SITE_URL:-${SERVICE_URL_SUPABASEKONG}}'
+      - 'GOTRUE_URI_ALLOW_LIST=${ADDITIONAL_REDIRECT_URLS}'
+      - 'GOTRUE_DISABLE_SIGNUP=${DISABLE_SIGNUP:-false}'
+      - 'GOTRUE_JWT_EXP=${JWT_EXPIRY:-3600}'
+      - 'GOTRUE_EXTERNAL_EMAIL_ENABLED=${ENABLE_EMAIL_SIGNUP:-true}'
+      - 'GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED=${ENABLE_ANONYMOUS_USERS:-false}'
+      - 'GOTRUE_MAILER_AUTOCONFIRM=${ENABLE_EMAIL_AUTOCONFIRM:-false}'
+      - 'GOTRUE_SMTP_ADMIN_EMAIL=${SMTP_ADMIN_EMAIL}'
+      - 'GOTRUE_SMTP_HOST=${SMTP_HOST}'
+      - 'GOTRUE_SMTP_PORT=${SMTP_PORT:-587}'
+      - 'GOTRUE_SMTP_USER=${SMTP_USER}'
+      - 'GOTRUE_SMTP_PASS=${SMTP_PASS}'
+      - 'GOTRUE_SMTP_SENDER_NAME=${SMTP_SENDER_NAME}'
+      - 'GOTRUE_EXTERNAL_PHONE_ENABLED=${ENABLE_PHONE_SIGNUP:-true}'
+      - 'GOTRUE_SMS_AUTOCONFIRM=${ENABLE_PHONE_AUTOCONFIRM:-true}'
+      - 'GOTRUE_MAILER_SUBJECTS_CONFIRMATION=${MAILER_SUBJECTS_CONFIRMATION}'
+      - 'GOTRUE_MAILER_SUBJECTS_RECOVERY=${MAILER_SUBJECTS_RECOVERY}'
+      - 'GOTRUE_MAILER_SUBJECTS_MAGIC_LINK=${MAILER_SUBJECTS_MAGIC_LINK}'
+      - 'GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGE=${MAILER_SUBJECTS_EMAIL_CHANGE}'
+      - 'GOTRUE_MAILER_SUBJECTS_INVITE=${MAILER_SUBJECTS_INVITE}'
+      - ENABLED_FEATURES_AUTHENTICATION_THIRD_PARTY_AUTH=false
+      - STORAGE_CONFIG_DIR=/etc/studio-config
+      - 'SUPAVISOR_URL=http://supabase-supavisor:4000'
+      - 'POOLER_TENANT_ID=${POOLER_TENANT_ID:-dev_tenant}'
+      - 'POOLER_PROXY_PORT_TRANSACTION=${POOLER_PROXY_PORT_TRANSACTION:-6543}'
+      - 'REALTIME_URL=http://realtime-dev:4000'
+      - REALTIME_TENANT_ID=realtime-dev
+      - UPLOAD_FILE_SIZE_LIMIT=524288000
+      - ENABLE_IMAGE_TRANSFORMATION=true
+      - S3_PROTOCOL_ENABLED=true
+```
+
+#### `supabase-studio` — volumes
+
+Append to the service's existing `volumes:` list:
+
+```yaml
+      - 'gotrue-config:/etc/gotrue'
+      - 'studio-auth-state:/var/lib/studio'
+      - './volumes/studio-config:/etc/studio-config'
+```
+
+#### `supabase-auth` — command and volumes
+
+The stock auth service has neither. Add both directly under its `image:` line:
+
+```yaml
+    command:
+      - auth
+      - '--config-dir'
+      - /etc/gotrue
+    volumes:
+      - 'gotrue-config:/etc/gotrue:ro'
+```
+
+`gotrue-config` is read-write on Studio and read-only here. Studio is the only writer.
+
+#### `supabase-auth` — environment
+
+Append to the service's existing `environment:` list:
+
+```yaml
+      - GOTRUE_MAILER_TEMPLATE_RELOADING_ENABLED=true
+      - GOTRUE_MAILER_TEMPLATE_MAX_AGE=1m
+```
+
+Without those two, an edited email template keeps sending the old copy for up to ten minutes.
+
+#### `supabase-storage` — command
+
+The stock storage service has no `command:`. Add it directly under its `image:` line:
+
+```yaml
+    command:
+      - sh
+      - '-c'
+      - 'set -a; [ -f /etc/studio-config/storage.env ] && . /etc/studio-config/storage.env; set +a; exec node dist/start/server.js'
+```
+
+`set -a` is not optional: without it the assignments stay shell-local, the storage server starts on
+the compose values, and every Storage save is silently a no-op with nothing reporting it. The line
+also assumes the image has no `ENTRYPOINT` and that its `CMD` is `node dist/start/server.js`, which
+is what `supabase/storage-api` ships today. `docker inspect --format '{{json .Config}}'
+supabase/storage-api:<tag>` says what your tag actually has.
+
+#### `supabase-storage` — volumes
+
+Append to the service's existing `volumes:` list:
+
+```yaml
+      - './volumes/studio-config:/etc/studio-config:ro'
+```
+
+#### Top level — `volumes:`
+
+The Coolify template carries no top-level `volumes:` block at all, even though three named volumes
+are already mounted in it. Add the block whole, at the end of the file and outside `services:`:
+
+```yaml
+volumes:
+  supabase-db-data:
+  supabase-db-config:
+  deno-cache:
+  gotrue-config:
+  studio-auth-state:
+```
+
+#### Then restart
+
+**Save**, then **Actions → Restart (pull latest)**. A plain **Restart** reuses the image already on
+the host and never fetches the forked Studio.
+
+One note on style: the blocks above are list-style (`- KEY=value`), which is the form the Coolify
+Supabase template uses. If the compose you are editing writes `environment:` as a mapping, convert
+them to `KEY: value` — YAML will not parse a block that is half list and half mapping, so never mix
+the two under one service.
+
+### Verify
+
+**In the dashboard.** The Authentication menu now carries Sign In / Providers, Emails and SMTP, URL
+Configuration, Rate Limits, Sessions, Multi-Factor, Attack Protection, Auth Hooks, Audit Logs and
+Performance. Realtime → Settings, Storage → Files → Settings, Storage → S3, the connection pooling
+card on Database → Settings, and the Data API page are all present.
+
+**In the `supabase-auth` log.** At boot:
+
+```
+starting configuration reloader
+```
+
+Within about six seconds of a save in the dashboard:
+
+```
+reloading api with new configuration
+```
+
+A value GoTrue refuses leaves the running configuration alone and logs:
+
+```
+reloader: error loading config
+```
+
+**What Studio actually wrote:**
+
+```bash
+docker exec <auth-container> cat /etc/gotrue/99_studio.env
+```
+
+**Storage, where the restart is what applies a save.** Change the upload limit on
+Storage → Files → Settings, then:
+
+```bash
+docker exec <storage-container> cat /etc/studio-config/storage.env
+docker exec <storage-container> sh -c "tr '\0' '\n' < /proc/1/environ | grep UPLOAD_FILE_SIZE_LIMIT"
+```
+
+The second line reads PID 1's environment rather than running `env`, because `docker exec … env`
+prints the compose environment and not the one the running server was started with. Before a
+restart of `supabase-storage` the two disagree; after it they agree, and that is the pass.
+
+[`FORK.md`](FORK.md) carries the fuller checks: the Data API max-rows `curl`, the deliberate
+bad-value test that proves a rejected reload leaves GoTrue running, and the script that mints a
+bearer token to read the Supavisor and Realtime tenants back.
+
+### Update to a new version
+
+- **Pinned to a dated tag**, which is the recommendation: change the tag on the studio `image:`
+  line, **Save**, then **Actions → Restart (pull latest)**.
+- **On `:latest`:** **Actions → Restart (pull latest)** on its own is the whole update.
+
+New tags appear on the
+[GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio)
+on every push to `main` — see [Image](#image) below.
+
+### One manual step afterwards
+
+A Storage settings or S3 access key save writes the file but does not apply it — restart the
+`supabase-storage` service to pick it up. Every other page applies its save on its own.
+
+Everything deeper — the variables Studio reads and their defaults, how each config file is rendered
+and applied, the known limitations of every page, and how to take changes from upstream — is in
+[`FORK.md`](FORK.md).
 
 ## Install (plain docker compose)
 
