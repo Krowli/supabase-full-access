@@ -142,14 +142,13 @@ export const ConnectionPooling = () => {
   const ignoreStartupParameters = pgbouncerConfig?.ignore_startup_parameters
 
   const onSubmit: SubmitHandler<z.infer<typeof PoolingConfigurationFormSchema>> = async (data) => {
-    const { default_pool_size } = data
-
     if (!projectRef || isHighAvailability) return
 
+    const { default_pool_size } = data
     updatePoolerConfig(
       {
         ref: projectRef,
-        default_pool_size: default_pool_size === null ? undefined : default_pool_size,
+        default_pool_size: default_pool_size === undefined ? defaultPoolSize : default_pool_size,
         ignore_startup_parameters: ignoreStartupParameters ?? '',
       },
       {
@@ -158,6 +157,7 @@ export const ConnectionPooling = () => {
           if (data) {
             form.reset({
               default_pool_size: data.default_pool_size ?? undefined,
+              max_client_conn: data.max_client_conn ?? undefined,
             })
           }
         },

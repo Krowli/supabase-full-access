@@ -1783,7 +1783,7 @@ export const functions: NavMenuConstant = {
       name: 'Configuration',
       url: undefined,
       items: [
-        { name: 'Environment Variables', url: '/guides/functions/secrets' },
+        { name: 'Environment variables', url: '/guides/functions/secrets' },
         { name: 'Managing Dependencies', url: '/guides/functions/dependencies' },
         { name: 'Function Configuration', url: '/guides/functions/function-configuration' },
       ],
@@ -3159,6 +3159,10 @@ export const self_hosting: NavMenuConstant = {
         { name: 'Configure S3 Storage', url: '/guides/self-hosting/self-hosted-s3' },
         { name: 'Enable MCP server', url: '/guides/self-hosting/enable-mcp' },
         { name: 'Configure Social Login (OAuth)', url: '/guides/self-hosting/self-hosted-oauth' },
+        {
+          name: 'Configure Custom OAuth/OIDC',
+          url: '/guides/self-hosting/self-hosted-custom-oauth-providers',
+        },
         { name: 'Configure Phone Login & MFA', url: '/guides/self-hosting/self-hosted-phone-mfa' },
         { name: 'Add Custom Email Templates', url: '/guides/self-hosting/custom-email-templates' },
         { name: 'Configure Auth Hooks', url: '/guides/self-hosting/self-hosted-auth-hooks' },
