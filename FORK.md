@@ -472,7 +472,7 @@ Seven things about that block:
   container are not read by storage-api — they are what Studio answers the first `GET` with, before
   anything has been saved, so that the page opens on the truth. The `524288000` above is 500 MB;
   upstream's compose ships a 50 MB limit and spells it `FILE_SIZE_LIMIT` on the storage service
-  (`docker/docker-compose.yml:373`). It is the number that has to agree, not the name — a save
+  (`docker/docker-compose.yml:372`). It is the number that has to agree, not the name — a save
   renders all three spellings of the limit into `storage.env` (`FILE_SIZE_LIMIT`,
   `UPLOAD_FILE_SIZE_LIMIT` and `UPLOAD_FILE_SIZE_LIMIT_STANDARD`), so it lands whichever one the
   storage service reads.

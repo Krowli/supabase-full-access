@@ -8,10 +8,10 @@ settings and S3 access keys, Data API settings, and Connection pooling. A save i
 lands in the configuration the running service actually reads — GoTrue's config directory,
 Storage's env file, the Realtime and Supavisor admin APIs, or the `authenticator` role's PostgREST
 settings — rather than in a hosted control plane. Not included: Authentication Overview,
-Third-Party Auth, Backups and point-in-time recovery, Replication, Analytics and Vector buckets,
-and Branching; those are cloud infrastructure rather than hidden pages, and nothing here adds
-them. OAuth Server and OAuth Apps are un-hidden but speak to GoTrue's own admin API, and
-[`FORK.md`](FORK.md) records them as unverified on a live stack.
+Third-Party Auth, Backups and point-in-time recovery, Pipelines (formerly Replication), Analytics
+and Vector buckets, and Branching; those are cloud infrastructure rather than hidden pages, and
+nothing here adds them. OAuth Server and OAuth Apps are un-hidden but speak to GoTrue's own admin
+API, and [`FORK.md`](FORK.md) records them as unverified on a live stack.
 
 ## Install on Coolify
 
@@ -27,11 +27,11 @@ service stays as the template created it. Take **path A** if you are creating th
    [`deploy/coolify/docker-compose.yaml`](deploy/coolify/docker-compose.yaml) from this repository.
    That file is the Coolify template with every fork change already applied.
 4. Pin the Studio image. The file ships `:latest`, which works as is; for production change that
-   one line to a dated tag from the
+   one line to a dated tag. The current one is below; anything newer is on the
    [GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio):
 
    ```yaml
-       image: 'ghcr.io/krowli/supabase-full-access-studio:YYYY.MM.DD-sha-XXXXXXX'
+       image: 'ghcr.io/krowli/supabase-full-access-studio:2026.10.04-sha-c4fdc1b'
    ```
 
 5. **Save**, then deploy the service.
@@ -72,8 +72,8 @@ Replace the studio service's image line. **From** — your template's tag may be
     image: 'ghcr.io/krowli/supabase-full-access-studio:latest'
 ```
 
-For production replace `latest` with a dated tag (`YYYY.MM.DD-sha-XXXXXXX`) from the
-[GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio).
+For production replace `latest` with a dated tag — currently `2026.10.04-sha-c4fdc1b`, with
+anything newer on the [GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio).
 
 While you are in the file: if the `minio-createbucket` service still says `image: minio/mc`, change
 it to `image: 'quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z'`. Docker Hub no longer serves the
