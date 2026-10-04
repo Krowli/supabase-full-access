@@ -150,7 +150,8 @@ export const useIsMarketplaceEnabled = () => {
 
 export const useIsExplorerEnabled = () => {
   const { flags } = useFeaturePreviewContext()
-  const isExplorerEnabled = useFlag('explorer')
+  // Self-hosted the flag can never be on; the preview toggle alone decides (useFeaturePreviews.ts).
+  const isExplorerEnabled = useFlag('explorer') || !IS_PLATFORM
   return isExplorerEnabled && flags[LOCAL_STORAGE_KEYS.UI_PREVIEW_EXPLORER]
 }
 

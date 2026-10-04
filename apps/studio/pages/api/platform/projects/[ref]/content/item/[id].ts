@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
+import { getNotebook } from '@/lib/api/self-hosted/notebooks'
 import { getSnippet } from '@/lib/api/snippets.utils'
 
 const wrappedHandler = (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
@@ -19,6 +20,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 const handleGetAll = async (req: NextApiRequest, res: NextApiResponse) => {
   try {
+    // Explorer's notebooks are kept apart from the `.sql` snippets (lib/api/self-hosted/notebooks.ts).
+    const notebook = await getNotebook(req.query.id as string)
+    if (notebook) return res.status(200).json(notebook)
+
     const snippet = await getSnippet(req.query.id as string)
 
     return res.status(200).json(snippet)

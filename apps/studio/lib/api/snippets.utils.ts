@@ -163,6 +163,9 @@ export async function getFilesystemEntries({
     const folderId = folderName ? generateDeterministicUuid([folderName]) : null
 
     for (const item of items) {
+      // Dot-entries are not snippets: notebooks live in `.notebooks` (lib/api/self-hosted/notebooks.ts).
+      if (item.name.startsWith('.')) continue
+
       const itemPath = path.join(dirPath, item.name)
 
       if (item.isDirectory()) {

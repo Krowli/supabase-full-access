@@ -20,7 +20,7 @@ import { cn } from 'ui'
 import { AdvisorSection } from './AdvisorSection'
 import { ConnectSection } from './ConnectSection'
 import { CustomReportSection } from './CustomReportSection'
-import { DEFAULT_SECTION_ORDER, mergeSectionOrder } from './Home.utils'
+import { DEFAULT_SECTION_ORDER, isHomeSectionVisible, mergeSectionOrder } from './Home.utils'
 import { NotebooksSection } from './NotebooksSection'
 import { ProjectUsageSection } from './ProjectUsageSection'
 import { ProjectUsageSectionDeltas } from './ProjectUsageSectionDeltas'
@@ -99,11 +99,9 @@ export const ProjectHome = () => {
   // maturity gate so long-running projects don't see it forever.
   const showConnectSection = !!project && (!IS_PLATFORM || !isMatureProject)
 
-  const renderOrder = mergeSectionOrder(sectionOrder).filter((id) => {
-    if (id === 'connect') return showConnectSection
-    if (id === 'usage' || id === 'custom-report') return IS_PLATFORM
-    return true
-  })
+  const renderOrder = mergeSectionOrder(sectionOrder).filter((id) =>
+    isHomeSectionVisible(id, { isPlatform: IS_PLATFORM, isExplorerEnabled, showConnectSection })
+  )
 
   return (
     <ProjectNeedsSecuring>
@@ -153,7 +151,7 @@ export const ProjectHome = () => {
                         </div>
                       )
                     }
-                    if (IS_PLATFORM && id === 'custom-report') {
+                    if (id === 'custom-report') {
                       // Notebooks take over the reports slot (and its saved position) under the Explorer preview
                       return (
                         <div

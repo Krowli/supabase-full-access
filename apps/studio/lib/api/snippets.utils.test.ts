@@ -204,6 +204,32 @@ describe('snippets.utils', () => {
       expect(entries.filter((e) => e.type === 'file')).toHaveLength(1)
     })
 
+    it('should skip dot-entries, where notebooks are kept', async () => {
+      const createMockDirent = (name: string, isDirectory: boolean) => ({
+        name,
+        isDirectory: () => isDirectory,
+        isFile: () => !isDirectory,
+      })
+
+      mockedFS.access.mockResolvedValue(undefined)
+      mockedFS.readdir.mockImplementation((dirPath: any) => {
+        if (dirPath === MOCK_SNIPPETS_DIR) {
+          return Promise.resolve([
+            createMockDirent('.notebooks', true),
+            createMockDirent('.hidden.sql', false),
+            createMockDirent('snippet.sql', false),
+          ] as any)
+        }
+        return Promise.resolve([])
+      })
+      mockedFS.readFile.mockResolvedValue('SELECT 1;')
+      mockedFS.stat.mockResolvedValue({ birthtime: new Date('2023-01-01') } as any)
+
+      const entries = await getFilesystemEntries()
+
+      expect(entries.map((e) => e.name)).toEqual(['snippet'])
+    })
+
     it('should handle empty SQL files', async () => {
       mockedFS.access.mockResolvedValue(undefined)
       mockedFS.readdir.mockResolvedValue([

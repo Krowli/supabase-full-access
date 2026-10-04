@@ -4,7 +4,8 @@ A self-hosted build of Supabase Studio in which the pages the upstream image hid
 cloud work against your own containers: Authentication (Sign In / Providers, Emails and SMTP,
 email templates, URL Configuration, Rate Limits, Sessions, Multi-Factor, Attack Protection, Auth
 Hooks, Audit Logs, Performance, OAuth Server, OAuth Apps, Passkeys), Realtime settings, Storage
-settings and S3 access keys, Data API settings, and Connection pooling. A save in the dashboard
+settings and S3 access keys, Data API settings, Connection pooling, and Explorer & Notebooks (an
+opt-in feature preview). A save in the dashboard
 lands in the configuration the running service actually reads — GoTrue's config directory,
 Storage's env file, the Realtime and Supavisor admin APIs, or the `authenticator` role's PostgREST
 settings — rather than in a hosted control plane. Not included: Authentication Overview,

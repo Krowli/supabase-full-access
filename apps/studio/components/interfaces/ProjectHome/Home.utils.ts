@@ -24,3 +24,20 @@ export function mergeSectionOrder(stored: string[]): string[] {
   }
   return merged
 }
+
+/** Whether a home section renders at all. */
+export function isHomeSectionVisible(
+  id: string,
+  {
+    isPlatform,
+    isExplorerEnabled,
+    showConnectSection,
+  }: { isPlatform: boolean; isExplorerEnabled: boolean; showConnectSection: boolean }
+): boolean {
+  if (id === 'connect') return showConnectSection
+  if (id === 'usage') return isPlatform
+  // Under the Explorer preview this slot holds Notebooks, which self-hosted keeps too
+  // (lib/api/self-hosted/notebooks.ts); custom reports themselves stay platform-only.
+  if (id === 'custom-report') return isPlatform || isExplorerEnabled
+  return true
+}

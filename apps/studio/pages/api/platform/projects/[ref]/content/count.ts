@@ -2,6 +2,7 @@ import { paths } from 'api-types'
 import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
+import { countNotebooks } from '@/lib/api/self-hosted/notebooks'
 import { getSnippets } from '@/lib/api/snippets.utils'
 
 const wrappedHandler = (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
@@ -24,6 +25,13 @@ const handleGetAll = async (req: NextApiRequest, res: NextApiResponse) => {
   const params = req.query as GetRequestData
 
   try {
+    // Notebooks are all shared with the project, none private — the shape Explorer reads.
+    if (params?.type === 'notebook') {
+      const count = await countNotebooks(params.name)
+      if (params.name) return res.status(200).json({ count })
+      return res.status(200).json({ shared: count, favorites: 0, private: 0 })
+    }
+
     const { snippets } = await getSnippets({
       searchTerm: params?.name,
       includeContent: false,

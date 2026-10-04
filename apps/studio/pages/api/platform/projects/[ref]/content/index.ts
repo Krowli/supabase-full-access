@@ -5,6 +5,12 @@ import { z } from 'zod'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
 import {
+  deleteNotebook,
+  listNotebooks,
+  NotebookValidationError,
+  upsertNotebook,
+} from '@/lib/api/self-hosted/notebooks'
+import {
   deleteSnippet,
   getSnippets,
   saveSnippet,
@@ -46,6 +52,7 @@ type GetResponseData =
   paths['/platform/projects/{ref}/content']['get']['responses']['200']['content']['application/json']
 
 const getRequestParamsSchema = z.object({
+  type: z.string().optional(),
   visibility: z.enum(['project', 'user']).optional(),
   name: z.string().optional(),
   limit: z
@@ -66,6 +73,24 @@ const handleGetAll = async (req: NextApiRequest, res: NextApiResponse<GetRespons
   }
 
   const params = result.data
+
+  // Explorer's notebooks are kept apart from the `.sql` snippets (lib/api/self-hosted/notebooks.ts).
+  // Every other type, or none, is the SQL Editor's snippet list as before.
+  if (params.type === 'notebook') {
+    try {
+      const { cursor, notebooks } = await listNotebooks({
+        searchTerm: params.name,
+        limit: params.limit,
+        cursor: params.cursor,
+        sort: params.sort_by,
+        sortOrder: params.sort_order,
+      })
+      return res.status(200).json({ data: notebooks, cursor })
+    } catch (error) {
+      console.error('Error fetching notebooks:', error)
+      return res.status(500).json({ data: [] })
+    }
+  }
 
   // Platform specific endpoint
   if (params.visibility === 'project') {
@@ -89,6 +114,8 @@ const handleGetAll = async (req: NextApiRequest, res: NextApiResponse<GetRespons
 }
 
 const handlePut = async (req: NextApiRequest, res: NextApiResponse) => {
+  if (req.body?.type === 'notebook') return handlePutNotebook(req, res)
+
   try {
     const updates = req.body
     const updatedSnippet = await updateSnippet(updates.id, updates)
@@ -115,6 +142,19 @@ const handlePut = async (req: NextApiRequest, res: NextApiResponse) => {
   }
 }
 
+const handlePutNotebook = async (req: NextApiRequest, res: NextApiResponse) => {
+  try {
+    const notebook = await upsertNotebook(req.body)
+    return res.status(200).json(notebook)
+  } catch (error) {
+    if (error instanceof NotebookValidationError) {
+      return res.status(400).json({ error: error.message })
+    }
+    console.error('Error saving notebook:', error)
+    return res.status(500).json({ error: 'Failed to save notebook' })
+  }
+}
+
 const snippetIdsSchema = z
   .string()
   .transform((val) => compact(val.split(',').map((id) => id.trim())))
@@ -131,8 +171,9 @@ const handleDelete = async (req: NextApiRequest, res: NextApiResponse) => {
   const snippetIds = result.data
 
   try {
+    // An id is a notebook's or a snippet's; the request does not say which.
     for (const id of snippetIds) {
-      await deleteSnippet(id)
+      if (!(await deleteNotebook(id))) await deleteSnippet(id)
     }
     res.setHeader('Content-Type', 'application/json')
     return res.status(200).send(snippetIds.map((id) => ({ id })))

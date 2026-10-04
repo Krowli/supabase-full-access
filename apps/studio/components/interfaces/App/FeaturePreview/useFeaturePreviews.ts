@@ -47,9 +47,11 @@ export const useFeaturePreviews = (): FeaturePreview[] => {
         name: 'Explorer & Notebooks',
         category: 'editors',
         discussionsUrl: 'https://github.com/orgs/supabase/discussions/49916',
-        enabled: isExplorerEnabled,
+        // Self-hosted the `explorer` flag can never be on, and the content API keeps notebooks
+        // there too (lib/api/self-hosted/notebooks.ts), so the preview is offered — still opt-in.
+        enabled: isExplorerEnabled || !IS_PLATFORM,
         isNew: true,
-        isPlatformOnly: true,
+        isPlatformOnly: IS_PLATFORM,
         isDefaultOptIn: false,
         getRoute: (ref?: string) => `/project/${ref}/explorer`,
       },

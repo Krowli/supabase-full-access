@@ -9,7 +9,8 @@ It landed in two stages and this file is written in that order. Everything down 
 upstream" is **stage 1 — Authentication**: those pages, backed by files Studio renders into
 GoTrue's config directory. **Stage 2 — Realtime, Storage, S3, the Data API and connection
 pooling** has its own section below, with its own compose block to paste. Stage 2 builds on stage 1
-and replaces none of it — the `studio-auth-state` volume is shared.
+and replaces none of it — the `studio-auth-state` volume is shared. **Explorer & Notebooks**, an
+opt-in preview that needs no compose change, has a short section after stage 2.
 
 Everything the fork adds lives under `apps/studio/`, plus this file and
 `.github/workflows/studio-fork-publish.yml`.
@@ -660,6 +661,42 @@ the page shows can list buckets once the restart is through.
   differently and mounts no config directory, so the admin URLs name hosts it does not have and
   pooling and Realtime answer 502 while a Storage save writes a file nothing reads. The fork is
   built for the Coolify compose stack described above.
+
+## Explorer & Notebooks
+
+Upstream ships Explorer — a workspace that runs SQL, saves it into notebooks and chats with the
+Assistant — as an opt-in preview behind the `explorer` flag, and marks it platform-only. Self-hosted
+the flag can never be on, and the content API kept nothing but SQL snippets, so every notebook
+request failed. The fork offers the preview self-hosted, still **off until someone turns it on**:
+account menu → Feature previews → Explorer & Notebooks → Enable feature. Once on, Explorer replaces
+the SQL Editor item in the sidebar, as it does on the platform; the SQL Editor and its snippets stay
+at `/project/<ref>/sql`, which Explorer links to. Turning the preview off again brings the menu back.
+
+**The gate edits** — each with a comment on the spot:
+
+| File                                                                             | Change                                                                                               |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `apps/studio/components/interfaces/App/FeaturePreview/useFeaturePreviews.ts`     | The Explorer preview is enabled and not platform-only off the platform. Still not opt-in by default. |
+| `apps/studio/components/interfaces/App/FeaturePreview/FeaturePreviewContext.tsx` | `useIsExplorerEnabled` lets the preview toggle alone decide off the platform.                        |
+| `apps/studio/components/interfaces/ProjectHome/Home.utils.ts`                    | The home page's reports slot shows self-hosted once Explorer is on, holding Notebooks.               |
+
+**Where notebooks are kept.** `apps/studio/lib/api/self-hosted/notebooks.ts` stores each notebook as
+its whole content row in one file, `<SNIPPETS_MANAGEMENT_FOLDER>/.notebooks/<id>.json`, written
+atomically at mode 0600. That is inside the snippets volume the stock compose already mounts
+(`./volumes/snippets:/app/snippets`), so notebooks survive a redeploy with nothing added. The snippet
+listing skips dot-entries, so `.notebooks` never shows up in the SQL Editor as a folder. The content
+handlers under `apps/studio/pages/api/platform/projects/[ref]/content/` route by type: `type=notebook`
+lists, counts, saves and reads notebooks, and every other request is the SQL Editor's as before.
+A notebook cell saved without an `_id` gets one, because the client requires it on every read.
+
+**Not covered:**
+
+- **The Assistant does not see notebooks.** Its notebook tools stay platform-only
+  (`apps/studio/lib/ai/is-explorer-enabled.ts`); self-hosted it keeps its fallback tools, and needs
+  `OPENAI_API_KEY` for anything at all.
+- **Log cells** are written for the platform's log store and are expected to fail against
+  self-hosted analytics. Database cells run through pg-meta like the SQL Editor.
+- **Two saves of one notebook at once:** the last write wins.
 
 ## Updating from upstream
 
