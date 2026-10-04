@@ -32,7 +32,7 @@ service stays as the template created it. Take **path A** if you are creating th
    [GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio):
 
    ```yaml
-       image: 'ghcr.io/krowli/supabase-full-access-studio:2026.10.04-sha-c4fdc1b'
+       image: 'ghcr.io/krowli/supabase-full-access-studio:2026.10.04-sha-12e5d28'
    ```
 
 5. **Save**, then deploy the service.
@@ -73,7 +73,7 @@ Replace the studio service's image line. **From** — your template's tag may be
     image: 'ghcr.io/krowli/supabase-full-access-studio:latest'
 ```
 
-For production replace `latest` with a dated tag — currently `2026.10.04-sha-c4fdc1b`, with
+For production replace `latest` with a dated tag — currently `2026.10.04-sha-12e5d28`, with
 anything newer on the [GHCR package page](https://github.com/Krowli/supabase-full-access/pkgs/container/supabase-full-access-studio).
 
 While you are in the file: if the `minio-createbucket` service still says `image: minio/mc`, change
