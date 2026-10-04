@@ -104,7 +104,7 @@ type BooleanStoredOnlyKey = (typeof BOOLEAN_STORED_ONLY_KEYS)[number]
  * it is a rate limit of nothing.
  */
 const NUMERIC_LIMITS = {
-  max_concurrent_users: 50_000,
+  max_concurrent_users: 300_000,
   max_events_per_second: 50_000,
   max_presence_events_per_second: 5_000,
   max_payload_size_in_kb: 3_000,
@@ -383,6 +383,8 @@ export async function getRealtimeConfig(): Promise<RealtimeConfig> {
       asNumber(state.postgres_changes_pool) ?? NUMERIC_STORED_ONLY_DEFAULTS.postgres_changes_pool,
     presence_enabled:
       asBoolean(state.presence_enabled) ?? BOOLEAN_STORED_ONLY_DEFAULTS.presence_enabled,
+    // A platform admin's suspension of the project. Self-hosted there is no admin to suspend it.
+    admin_suspended_at: null,
   }
 }
 

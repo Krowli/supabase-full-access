@@ -117,6 +117,7 @@ describe('/api/platform/projects/[ref]/config/realtime', () => {
         connection_pool: 2,
         postgres_changes_pool: 2,
         presence_enabled: true,
+        admin_suspended_at: null,
       })
     })
 

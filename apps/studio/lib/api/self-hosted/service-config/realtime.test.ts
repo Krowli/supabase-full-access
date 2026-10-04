@@ -597,7 +597,7 @@ describe('api/self-hosted/service-config/realtime', () => {
 
       it.each([
         ['max_concurrent_users', 0],
-        ['max_concurrent_users', 50_001],
+        ['max_concurrent_users', 300_001],
         ['max_events_per_second', 50_001],
         ['max_presence_events_per_second', 5001],
         ['max_payload_size_in_kb', 3001],
