@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
 import { selfHostedSupabaseAdmin as supabase } from '@/lib/api/self-hosted-admin'
+import { projectEnv } from '@/lib/api/self-hosted/project-context'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
@@ -25,7 +26,7 @@ const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
 
   // change the domain name to the SUPABASE_PUBLIC_URL since SUPABASE_URL is not accessible from the client
   const publicUrl = new URL(data.publicUrl)
-  const parsed = new URL(process.env.SUPABASE_PUBLIC_URL!)
+  const parsed = new URL(projectEnv('SUPABASE_PUBLIC_URL')!)
   publicUrl.protocol = parsed.protocol
   publicUrl.host = parsed.host
   publicUrl.port = parsed.port

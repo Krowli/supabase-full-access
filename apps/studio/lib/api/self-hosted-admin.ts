@@ -1,5 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
+import { projectAdminClient } from './self-hosted/multi-project'
+import { isMultiProject } from './self-hosted/project-context'
+
 // Lazy admin client for self-hosted API routes under
 // `pages/api/platform/{auth,storage}/**`. SUPABASE_URL and
 // SUPABASE_SERVICE_KEY are only set on self-hosted deployments — the
@@ -16,6 +19,7 @@ let _client: SupabaseClient | undefined
 
 export const selfHostedSupabaseAdmin = new Proxy({} as SupabaseClient, {
   get(_target, prop) {
+    if (isMultiProject()) return Reflect.get(projectAdminClient(), prop) // Fork: client per project
     _client ??= createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!)
     return Reflect.get(_client, prop)
   },

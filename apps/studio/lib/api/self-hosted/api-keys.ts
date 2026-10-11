@@ -1,6 +1,7 @@
 /**
  * Both CLI and self-hosted inject the same env vars.
  */
+import { projectEnv } from './project-context'
 import { assertSelfHosted } from './util'
 
 export type NonPlatformApiKey = {
@@ -30,7 +31,7 @@ export function getNonPlatformApiKeys(): NonPlatformApiKey[] {
   const keys: NonPlatformApiKey[] = [
     {
       name: 'anon',
-      api_key: process.env.SUPABASE_ANON_KEY ?? '',
+      api_key: projectEnv('SUPABASE_ANON_KEY') ?? '',
       id: 'anon',
       type: 'legacy',
       hash: '',
@@ -39,7 +40,7 @@ export function getNonPlatformApiKeys(): NonPlatformApiKey[] {
     },
     {
       name: 'service_role',
-      api_key: process.env.SUPABASE_SERVICE_KEY ?? '',
+      api_key: projectEnv('SUPABASE_SERVICE_KEY') ?? '',
       id: 'service_role',
       type: 'legacy',
       hash: '',
@@ -48,7 +49,7 @@ export function getNonPlatformApiKeys(): NonPlatformApiKey[] {
     },
   ]
 
-  const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY
+  const publishableKey = projectEnv('SUPABASE_PUBLISHABLE_KEY')
   if (publishableKey) {
     keys.push({
       name: 'publishable',
@@ -61,7 +62,7 @@ export function getNonPlatformApiKeys(): NonPlatformApiKey[] {
     })
   }
 
-  const secretKey = process.env.SUPABASE_SECRET_KEY
+  const secretKey = projectEnv('SUPABASE_SECRET_KEY')
   if (secretKey) {
     keys.push({
       name: 'secret',

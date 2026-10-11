@@ -2,6 +2,7 @@ import { components } from 'api-types'
 import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
+import { projectEnv } from '@/lib/api/self-hosted/project-context'
 
 type ProjectAppConfig = components['schemas']['ProjectSettingsResponse_Output']['app_config'] & {
   protocol?: string
@@ -26,7 +27,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 const handlePost = async (_req: NextApiRequest, res: NextApiResponse) => {
   const response = {
-    api_key: process.env.SUPABASE_SERVICE_KEY ?? '',
+    api_key: projectEnv('SUPABASE_SERVICE_KEY') ?? '',
   }
 
   return res.status(200).json(response)

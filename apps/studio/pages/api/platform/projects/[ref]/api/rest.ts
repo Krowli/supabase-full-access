@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
+import { projectEnv } from '@/lib/api/self-hosted/project-context'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
@@ -19,10 +20,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 const handleGet = async (_req: NextApiRequest, res: NextApiResponse) => {
-  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/`, {
+  const response = await fetch(`${projectEnv('SUPABASE_URL')}/rest/v1/`, {
     method: 'GET',
     headers: {
-      apikey: process.env.SUPABASE_SERVICE_KEY!,
+      apikey: projectEnv('SUPABASE_SERVICE_KEY')!,
     },
   })
   if (response.ok) {
