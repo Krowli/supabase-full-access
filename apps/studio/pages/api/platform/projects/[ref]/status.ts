@@ -8,7 +8,8 @@ import { currentProjectStatus } from '@/lib/api/self-hosted/project-context'
  * (deploy/platform/SPEC.md §2.1). `apiWrapper` has already answered 404 for a ref the registry
  * does not hold.
  */
-export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
+const projectStatus = (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
+export default projectStatus
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { method } = req

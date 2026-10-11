@@ -8,7 +8,9 @@ import { DEFAULT_ORG_SLUG, organizationProjectsResponse } from '@/lib/api/self-h
  * (deploy/platform/SPEC.md §2.1). Self-hosted has one organization, and every project in the
  * registry belongs to it.
  */
-export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
+const organizationProjects = (req: NextApiRequest, res: NextApiResponse) =>
+  apiWrapper(req, res, handler)
+export default organizationProjects
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { method } = req
