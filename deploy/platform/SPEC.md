@@ -1,6 +1,6 @@
 # Multi-project self-hosted Studio: design spec
 
-Status: draft, 2026-10-12. Branch `platform/control-plane`. M0 done (§8); M1 code done, server check pending (§9).
+Status: draft, 2026-10-12. Branch `platform/control-plane`. M0 done (§8); M1 code done (§9); M2 and the M3 Studio side code done, server checks pending (§11).
 
 Goal: one Studio on the database server that lists many projects, switches between them, and has
 a "New project" button. Each project gets its own Postgres, GoTrue, PostgREST and storage-api.
@@ -569,3 +569,131 @@ existing `import/no-anonymous-default-export` warnings on the upstream route fil
   stacks that pull `latest` never get unreviewed code.
 - **Kong config updates** go through Kong's admin API (`POST /config`, DB-less), which
   validates before applying — the control plane needs no Docker socket.
+
+## 11. M2/M3 status (2026-10-12): switcher, M1 leftovers, registry from the control plane
+
+**What was built.** Commits after `3751f58a` on `platform/control-plane`. Paths under `studio/`.
+
+- **Registry from the control plane** (`lib/api/self-hosted/control-plane-registry.ts`, new).
+  `STUDIO_PROJECT_REGISTRY_URL` + `STUDIO_PROJECT_REGISTRY_TOKEN` + `STUDIO_PROJECT_DOMAIN_SUFFIX`
+  replace the JSON file (setting both is an error). Contract coded against
+  `platform/cp-service` `apps/control-plane/src/server.ts`: `GET /projects`, then
+  `GET /projects/<ref>/secrets` for each project that has a `coolify_service_uuid`, bearer token,
+  5 s timeout per call. Each project becomes the M1 entry shape:
+  - `POSTGRES_HOST = supabase-db-<coolify_service_uuid>`, `POSTGRES_PASSWORD = db_password`;
+  - `SUPABASE_URL = SUPABASE_PUBLIC_URL = https://<ref>.<suffix>` (§10);
+  - `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`, `AUTH_JWT_SECRET` from the secrets;
+  - status `CREATING`/`COMING_UP` → `COMING_UP`, `ACTIVE_HEALTHY` → `ACTIVE_HEALTHY`,
+    `FAILED` → `INIT_FAILED`, anything else → `UNKNOWN`.
+  - Cached 10 s; concurrent requests share one load. A failed refresh keeps the last good
+    registry for another 10 s and logs `[project-registry] <path> answered <status>` (never the
+    token or a body). With no good registry yet the request fails (500 with the message). An
+    unknown ref is still a 404; nothing falls back to `default`.
+  - A project without a stack yet (no uuid) is listed, and `/status` and the detail answer
+    `COMING_UP`, but `projectEnv` throws for any `REQUIRED_ENV` name ("Project <ref> is not ready
+    (COMING_UP): it has no POSTGRES_HOST yet"), so none of its backend reads can reach `default`'s.
+  - `runWithProject` is now async (the control plane is read over HTTP); `listProjects()` is new.
+- **M2 switcher.**
+  - New fork routes (each with a TanStack mirror; `routeTree.gen.ts` regenerated with
+    `@tanstack/router-generator`, identical output for the existing routes):
+    `pages/api/platform/organizations/[slug]/projects.ts` (paged `OrganizationProjectsResponse`,
+    `limit`/`offset`/`sort`/`search`/`statuses`, 404 for any slug but `default-org-slug`; each
+    project's primary database has `identifier = ref`) and `pages/api/platform/projects/[ref]/status.ts`.
+  - `lib/api/self-hosted/project-list.ts` (new) builds both lists; `default` keeps id 1.
+  - `IS_MULTI_PROJECT = NEXT_PUBLIC_IS_MULTI_PROJECT === 'true'` in `lib/constants/multi-project.ts`
+    (new). The publish workflow passes it only for a manual run with `multi_project: true`
+    (Dockerfile `ARG` in `build-next`); pushes to `main` build it off.
+- **M1 leftovers (§9 "Deferred, M2").**
+  - `projects/[ref]/databases.ts` and `props/project/[ref]/api.ts`: host, port, REST URL, keys and
+    `identifier` of the request's project (the Connect sheet matches the primary database by
+    `identifier === ref`).
+  - The ten `pg-meta/[ref]` GET routes send the project's encrypted connection string
+    (`withProjectConnection` in `multi-project.ts`) under a registry; single-project they forward the
+    request headers as before.
+  - `apiHelpers.ts`'s `apiKey` header is the project's service key. This was a real bug for
+    projects other than `default`: Kong's key-auth reads `apikey` before `Authorization`, so
+    invite/OTP/recover/magic link on project B carried `default`'s key and would get Kong's ACL 403.
+  - **MCP: refused under a registry** (`pages/api/mcp`, 501 "The MCP server is not available when
+    Studio serves several projects…"). Chosen over resolving a `?project_ref=` because the MCP tools
+    also read `SUPABASE_PUBLISHABLE_KEY`, the project settings and the exposed schemas straight from
+    `default`; resolving a ref would have needed all of those made per-project first, and a missed
+    one would answer for the wrong project. Without a registry MCP is unchanged.
+- **M3.**
+  - Realtime settings: under a registry every project but `default` reads its tenant from the
+    shared Realtime admin API only (`GET /api/tenants/<ref>`, admin JWT), without the
+    `_realtime.tenants` query and without the degraded-mode warning. `default` keeps the table read.
+  - `PGRST_DB_SCHEMAS` is a per-project registry name; the Data API settings and
+    `getExposedSchemas` fall back to the project's own value (default `public,graphql_public`).
+  - Confirmed with route tests: saving proj1's auth config writes only
+    `<projectsDir>/proj1/gotrue/99_studio.env` and `<projectsDir>/proj1/state/auth-config.json`;
+    a later save on `default` leaves proj1's file byte-identical.
+- **Env guard (risk 4)** now reads every name in `PROJECT_ENV_NAMES` plus `GOTRUE_*`, pins
+  `DEFAULT_EXPOSED_SCHEMAS`, adds six gated files (`mcp`, `profile`, `projects`, `databases`,
+  `props`), and fails if any `pg-meta/[ref]` GET route stops wrapping its headers. The wider scan
+  found one more direct read: `pages/api/get-s3-keys.ts` (CLI-only S3 keys, no caller in the
+  dashboard), pinned as "later".
+
+**Upstream patches in this round** (added/removed lines):
+
+| File | +/- |
+|---|---|
+| `components/layouts/AppLayout/ProjectDropdown.tsx` | +3 −1 |
+| `components/interfaces/App/CommandMenu/OrgProjectSwitcher.tsx` | +3 −1 |
+| `pages/api/platform/projects/index.ts` | +7 −1 |
+| `pages/api/platform/profile/index.ts` | +3 −0 |
+| `pages/api/platform/projects/[ref]/databases.ts` | +6 −2 |
+| `pages/api/platform/props/project/[ref]/api.ts` | +5 −2 |
+| `pages/api/platform/pg-meta/[ref]/*.ts` (10 GET routes) | +2 −1 each |
+| `pages/api/mcp/index.ts` | +2 −0 |
+| `lib/api/apiHelpers.ts` | +2 −1 |
+| `Dockerfile` | +2 −0 |
+| `routeTree.gen.ts` (generated) | +45 −0 |
+
+Fork-owned files changed: `project-context.ts`, `multi-project.ts`, `service-config/{postgrest,realtime}.ts`,
+`turbo.jsonc`, `.github/workflows/studio-fork-publish.yml`.
+
+**Tests** (`NODE_ENV=test vitest --run`, whole studio suite, compared by test id):
+
+| | Files | Tests | Failed |
+|---|---|---|---|
+| Before (3751f58a) | 729 | 8497 | 0 |
+| After (this round) | 734 | 8569 (8497 old + 72 new) | 0 |
+
+By test id: none of the 8497 old tests is missing or changed status.
+
+New tests: `control-plane-registry.test.ts` (13), `project-context.test.ts` (+15),
+`tests/pages/api/platform/project-switcher.test.ts` (17), `multi-project.test.ts` (+11),
+`tests/pages/api/mcp/multi-project.test.ts` (3), `realtime.test.ts` (+3), `project-env-guard.test.ts`
+(+6), `ProjectDropdown.multi-project.test.tsx` (2), `OrgProjectSwitcher.test.tsx` (2).
+`tsc --noEmit` passes. ESLint on the touched files: 0 errors; the warnings are the existing
+`import/no-anonymous-default-export` and `no-explicit-any` ones in upstream route files.
+
+**Deviations.**
+
+- `GET /platform/projects` answers the paginated shape to any `Version: 2` caller, with or without a
+  registry. Before, it gave those callers a bare array they could not read; no self-hosted page
+  sent `Version: 2` until the command-menu gate, so nothing that worked changes.
+- `OrgProjectSwitcher.tsx`: only the project query (line 19) is gated. §4 B also named line 61, the
+  organizations command; its target pages are platform-only, and there is one organization.
+- The `IS_PLATFORM` → `|| IS_MULTI_PROJECT` gates are 3-line patches (import, comment, line).
+- The header's "New project" link still follows upstream's `projects:create` feature flag and
+  leads to the upstream form, which does not work self-hosted (§2.3). Until M6, run a multi-project
+  Studio with `ENABLED_FEATURES_PROJECTS_CREATE=false` to hide it.
+- `projectsDir` with the control plane is the default `/data/pieowl/projects`; no env sets it.
+
+**Not verified.** Nothing ran on a server. The M2 verify (switching changes Table Editor, SQL,
+Auth users, Storage, API keys and Connect strings; `default` still matches production) needs an image
+built with `multi_project: true`, a reachable control plane or registry file, and Kong routes for
+the second project's host.
+
+**What remains for M6 (create UI).**
+
+- Local `POST /platform/projects` → control plane `POST /projects {name}`; answer
+  `CreateProjectResponse` shape (`ref`, `name`, `status`, `endpoint`, keys).
+- After a create, drop the 10 s registry cache (or re-read on a miss) so `/project/<ref>` does not
+  404 for up to 10 s.
+- The fork's `pages/new-project.tsx` (name, DB password) and the one redirect from `/new/<slug>`;
+  then turn `projects:create` back on.
+- BuildingState already polls `/status`; `COMING_UP` → `ACTIVE_HEALTHY` is served by the
+  status route, and `INIT_FAILED` needs a message and a retry (`POST /projects {ref}`).
+- MCP per project (resolve `?project_ref=`) once the MCP tools' reads go through the resolver.
