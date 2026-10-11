@@ -4,6 +4,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 
 import { IS_PLATFORM } from '../constants'
 import { apiAuthenticate } from './apiAuthenticate'
+import { withProjectContext } from './self-hosted/project-context'
 import { ResponseError, ResponseFailure } from '@/types'
 
 export function isResponseOk<T>(response: T | ResponseFailure | undefined): response is T {
@@ -51,7 +52,8 @@ export async function apiWrapper(
       claims = response
     }
 
-    return await handler(req, res, claims)
+    // Fork: self-hosted readers answer for the project the route names (deploy/platform/SPEC.md).
+    return await withProjectContext(req, res, () => handler(req, res, claims))
   } catch (error) {
     Sentry.captureException(error)
     return res.status(500).json({ error })
