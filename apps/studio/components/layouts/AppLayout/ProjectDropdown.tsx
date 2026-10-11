@@ -22,6 +22,7 @@ import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganizati
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { IS_PLATFORM } from '@/lib/constants'
 import type { ManagedBy } from '@/lib/constants/infrastructure'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import { useTrack } from '@/lib/telemetry/track'
 
 // --- Sub-components ---
@@ -179,7 +180,8 @@ export const ProjectDropdown = ({
       <OrganizationProjectSelector {...selectorProps} embedded className={className} fetchOnMount />
     )
 
-  return IS_PLATFORM ? (
+  // Fork: the project switcher on a multi-project self-hosted Studio (deploy/platform/SPEC.md)
+  return IS_PLATFORM || IS_MULTI_PROJECT ? (
     <ProjectDropdownPlatformView
       projectRef={project?.ref}
       projectName={selectedProject?.name ?? ''}
