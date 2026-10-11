@@ -1,0 +1,16 @@
+# M0 Kong spike: one shared Kong; routes are edited on the server and reloaded.
+services:
+  kong:
+    image: kong/kong:3.9.1
+    environment:
+      - KONG_DATABASE=off
+      - KONG_DECLARATIVE_CONFIG=/home/kong/kong.yml
+      - KONG_PLUGINS=key-auth,acl,request-transformer,cors
+      - 'KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS=4 32k'
+    volumes:
+      - type: bind
+        source: ./kong.yml
+        target: /home/kong/kong.yml
+        content: |
+          _format_version: '2.1'
+          services: []

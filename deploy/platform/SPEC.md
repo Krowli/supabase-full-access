@@ -412,5 +412,18 @@ the registration calls; run on B, results 2026-10-12):
 So both services are multi-tenant as the spec assumed, with one admin JWT secret for the
 platform and a per-project JWT secret stored in the Realtime tenant. Supavisor and Realtime
 metadata live in a small platform Postgres (`_supabase` DB and `_realtime` schema), not in any
-project DB. Remaining M0 item: per-host routes in one shared Kong (standard Kong `hosts`
-matching; risk is only the reload procedure, spec §6.3).
+project DB. **Shared Kong — verified** (`spike/kong-shared.yaml`, `spike/kong-project.yaml` ×2,
+`spike/kong-test.sh`): one DB-less Kong, one service + route per project matched by `hosts`,
+one `key-auth` consumer per project key with an `acl` group, `acl allow: [<ref>]` on the route.
+
+| Check | Result |
+|---|---|
+| `Host: p1…` + p1 anon key → p1 PostgREST | 200, rows from project one's DB |
+| `Host: p2…` + p2 anon key → p2 PostgREST | 200, rows from project two's DB |
+| p2 key on p1 host / p1 key on p2 host | 403 `You cannot consume this service` |
+| no key | 401 |
+| 300 sequential requests while the config is rewritten and `kong reload`ed twice | 300 × 200, 0 failures |
+| broken file → `kong config parse` before reload | rejected, reload skipped, traffic unaffected |
+
+Reload procedure for the control plane: write the new declarative file, `kong config parse`,
+then `kong reload`; never reload an unparsed file. **M0 is complete.**

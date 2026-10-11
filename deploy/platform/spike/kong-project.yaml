@@ -1,0 +1,23 @@
+# M0 Kong spike: one light project (Postgres + PostgREST).
+services:
+  supabase-db:
+    image: supabase/postgres:15.8.1.085
+    environment:
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - JWT_SECRET=${SERVICE_PASSWORD_JWT}
+      - JWT_EXP=3600
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf -c log_min_messages=fatal
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -h localhost"]
+      interval: 5s
+      retries: 30
+  supabase-rest:
+    image: postgrest/postgrest:v14.6
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      - PGRST_DB_URI=postgres://authenticator:${SERVICE_PASSWORD_POSTGRES}@supabase-db:5432/postgres
+      - PGRST_DB_SCHEMAS=public
+      - PGRST_DB_ANON_ROLE=anon
+      - PGRST_JWT_SECRET=${SERVICE_PASSWORD_JWT}
