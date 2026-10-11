@@ -1,0 +1,13 @@
+# M0 spike: one light project database (supabase/postgres image, like a real project).
+services:
+  supabase-db:
+    image: supabase/postgres:15.8.1.085
+    environment:
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - JWT_SECRET=${SERVICE_PASSWORD_JWT}
+      - JWT_EXP=3600
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf -c log_min_messages=fatal
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -h localhost"]
+      interval: 5s
+      retries: 30

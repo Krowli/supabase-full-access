@@ -397,5 +397,20 @@ Consequence for the design: the shared stack and every project stack set
 `<service>-<project-service-uuid>` (e.g. `supabase-db-<uuid>`), which the control plane
 knows from the Coolify API response at creation time. No custom Docker networks needed.
 
-Still to verify in M0: Supavisor `PUT /api/tenants/<ref>`, Realtime tenant creation and
-Host-based routing through a shared Kong, per-host Kong routes with per-project keys.
+**Shared Supavisor and Realtime — verified** (files in `spike/`: `platform.yaml` = shared
+stack with its own metadata Postgres, `project.yaml` = one light project DB, `register.sh` =
+the registration calls; run on B, results 2026-10-12):
+
+| Check | Result |
+|---|---|
+| Supavisor `PUT /api/tenants/proj1` (admin JWT, HS256) | 201 |
+| `psql -h supavisor-<uuid> -p 6543 -U postgres.proj1` → project DB | query ok (server = project container on `coolify`) |
+| Realtime `POST /api/tenants` with `postgres_cdc_rls` → project DB | 201, `/health` healthy |
+| WebSocket upgrade, `Host: proj1.<anything>` + anon JWT of the project | 101 |
+| WebSocket upgrade, `Host: other.<anything>` | 403 |
+
+So both services are multi-tenant as the spec assumed, with one admin JWT secret for the
+platform and a per-project JWT secret stored in the Realtime tenant. Supavisor and Realtime
+metadata live in a small platform Postgres (`_supabase` DB and `_realtime` schema), not in any
+project DB. Remaining M0 item: per-host routes in one shared Kong (standard Kong `hosts`
+matching; risk is only the reload procedure, spec §6.3).

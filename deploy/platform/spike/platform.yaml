@@ -1,0 +1,57 @@
+# M0 spike: shared Supavisor + Realtime with their own metadata Postgres.
+services:
+  platform-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_PLATFORMDB}
+    command: postgres -c shared_buffers=64MB
+    volumes:
+      - type: bind
+        source: ./init.sql
+        target: /docker-entrypoint-initdb.d/init.sql
+        content: |
+          create database _supabase;
+          create schema if not exists _realtime;
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+  supavisor:
+    image: supabase/supavisor:2.7.4
+    depends_on:
+      platform-db:
+        condition: service_healthy
+    environment:
+      - PORT=4000
+      - DATABASE_URL=ecto://postgres:${SERVICE_PASSWORD_PLATFORMDB}@platform-db:5432/_supabase
+      - CLUSTER_POSTGRES=true
+      - SECRET_KEY_BASE=${SERVICE_PASSWORD_64_SUPAVISORSECRET}
+      - VAULT_ENC_KEY=${SERVICE_PASSWORD_VAULTENC}
+      - API_JWT_SECRET=${SERVICE_PASSWORD_ADMINJWT}
+      - METRICS_JWT_SECRET=${SERVICE_PASSWORD_ADMINJWT}
+      - REGION=local
+      - ERL_AFLAGS=-proto_dist inet_tcp
+    command: ["/bin/sh", "-c", "/app/bin/migrate && /app/bin/server"]
+  realtime:
+    image: supabase/realtime:v2.76.5
+    depends_on:
+      platform-db:
+        condition: service_healthy
+    environment:
+      - PORT=4000
+      - DB_HOST=platform-db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=${SERVICE_PASSWORD_PLATFORMDB}
+      - DB_NAME=postgres
+      - DB_AFTER_CONNECT_QUERY=SET search_path TO _realtime
+      - DB_ENC_KEY=supabaserealtime
+      - API_JWT_SECRET=${SERVICE_PASSWORD_ADMINJWT}
+      - SECRET_KEY_BASE=${SERVICE_PASSWORD_64_REALTIMESECRET}
+      - METRICS_JWT_SECRET=${SERVICE_PASSWORD_ADMINJWT}
+      - ERL_AFLAGS=-proto_dist inet_tcp
+      - DNS_NODES=''
+      - APP_NAME=realtime
+      - SEED_SELF_HOST=false
+      - RUN_JANITOR=false
+    command: sh -c "/app/bin/migrate && /app/bin/server"
