@@ -1,6 +1,7 @@
 import { components } from 'api-types'
 
 import { DEFAULT_AUTH_JWT_SECRET, DEFAULT_EXPOSED_SCHEMAS, POSTGRES_DATABASE } from '../constants'
+import { isMultiProject, projectEnv, projectPostgres } from '../project-context'
 import { executeQuery } from '../query'
 import { ServiceConfigValidationError } from './errors'
 
@@ -127,16 +128,16 @@ export async function getPostgrestConfig(): Promise<PostgrestConfig> {
     db_anon_role: 'anon',
     db_extra_search_path:
       settings.get('pgrst.db_extra_search_path') ??
-      process.env.PGRST_DB_EXTRA_SEARCH_PATH ??
+      projectEnv('PGRST_DB_EXTRA_SEARCH_PATH') ??
       'public',
     // Not an in-database setting, so there is nothing here to read it from. `null` is what the
     // platform answers when the pool is not pinned, and what the UI renders as "set elsewhere".
     db_pool: null,
     db_schema: settings.get('pgrst.db_schemas') ?? DEFAULT_EXPOSED_SCHEMAS,
-    jwt_secret: process.env.AUTH_JWT_SECRET ?? DEFAULT_AUTH_JWT_SECRET,
+    jwt_secret: projectEnv('AUTH_JWT_SECRET') ?? DEFAULT_AUTH_JWT_SECRET,
     max_rows:
       parseInteger(settings.get('pgrst.db_max_rows')) ??
-      (Number(process.env.PGRST_DB_MAX_ROWS) || 1000),
+      (Number(projectEnv('PGRST_DB_MAX_ROWS')) || 1000),
     role_claim_key: '.role',
   }
 }
@@ -225,13 +226,14 @@ function validateInteger(value: unknown, field: string, min: number, max: number
  * Writing where PostgREST reads keeps the write and the read on the same row.
  */
 function databaseName(): string {
-  if (!DATABASE_NAME.test(POSTGRES_DATABASE) || POSTGRES_DATABASE.length > MAX_IDENTIFIER_LENGTH) {
+  const database = isMultiProject() ? projectPostgres().database : POSTGRES_DATABASE
+  if (!DATABASE_NAME.test(database) || database.length > MAX_IDENTIFIER_LENGTH) {
     // Not a `ServiceConfigValidationError`: nothing the client sent is wrong. The container's
     // POSTGRES_DB is, and that is a 500 the operator needs to see.
-    throw new Error(`POSTGRES_DB is not a name this can scope a setting to: ${POSTGRES_DATABASE}`)
+    throw new Error(`POSTGRES_DB is not a name this can scope a setting to: ${database}`)
   }
 
-  return POSTGRES_DATABASE
+  return database
 }
 
 /** Safe to quote rather than escape: every value reaching here passed the validation above. */

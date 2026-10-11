@@ -1,7 +1,7 @@
 import { components } from 'api-types'
 
 import { readJsonState, writeJsonState } from '../auth-config/state'
-import { AUTH_JWT_SECRET } from '../constants'
+import { adminJwtSecret, projectEnv } from '../project-context'
 import { executeQuery } from '../query'
 import { ServiceConfigValidationError, ServiceUnavailableError } from './errors'
 import { adminFetch } from './http'
@@ -54,16 +54,16 @@ export const REALTIME_STATE_FILE_NAME = 'realtime-config.json'
 const realtimeUrl = () => process.env.REALTIME_URL || 'http://realtime-dev:4000'
 
 /** The one tenant this stack runs. `realtime-dev` is what the compose file seeds. */
-const realtimeTenantId = () => process.env.REALTIME_TENANT_ID || 'realtime-dev'
+const realtimeTenantId = () => projectEnv('REALTIME_TENANT_ID') || 'realtime-dev'
 
 const tenantUrl = () => `${realtimeUrl()}/api/tenants/${encodeURIComponent(realtimeTenantId())}`
 
 /**
- * A token for one request. Realtime's `check_auth` plug verifies it with `API_JWT_SECRET`, which in
- * this stack is the same string Studio holds as `AUTH_JWT_SECRET`, and requires an `exp` in the
- * future.
+ * A token for one request. Realtime's `check_auth` plug verifies it with `API_JWT_SECRET`, the
+ * platform admin secret (`adminJwtSecret`: `PLATFORM_ADMIN_JWT_SECRET`, else `AUTH_JWT_SECRET`), and
+ * requires an `exp` in the future.
  */
-const token = () => signHs256Jwt({}, AUTH_JWT_SECRET)
+const token = () => signHs256Jwt({}, adminJwtSecret())
 
 /** Tenant columns the settings page owns and writes, split by the type each one holds. */
 const NUMERIC_APPLIED_KEYS = [

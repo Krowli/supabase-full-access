@@ -1,5 +1,6 @@
 import { components } from 'api-types'
 
+import { currentProjectRef, projectEnv } from '../project-context'
 import { COMPUTED_KEYS, DEFAULTS, NULL_BY_DEFAULT, TEMPLATE_IDS } from './defaults'
 import { PLATFORM_CONFIG_TYPES } from './keys.generated'
 import { MANAGED_KEYS, STRING_TYPED_KEYS, toEnv } from './mapping'
@@ -61,7 +62,7 @@ export const MIRRORED_ENV_KEYS = [
 const ENV_PREFIX = 'GOTRUE_'
 
 /** `{ platformKey → env name }`, so the resolution below looks a key up rather than building one. */
-const MIRRORED_BY_KEY: ReadonlyMap<string, string> = new Map(
+const MIRRORED_BY_KEY: ReadonlyMap<string, (typeof MIRRORED_ENV_KEYS)[number]> = new Map(
   MIRRORED_ENV_KEYS.map((name) => [name.slice(ENV_PREFIX.length), name])
 )
 
@@ -158,7 +159,7 @@ export async function getAuthConfig(): Promise<GoTrueConfigResponse> {
 
     const mirroredName = MIRRORED_BY_KEY.get(key)
     const mirrored =
-      mirroredName === undefined ? undefined : parseMirrored(key, process.env[mirroredName])
+      mirroredName === undefined ? undefined : parseMirrored(key, projectEnv(mirroredName))
     if (mirrored !== undefined) {
       config[key] = mirrored
       continue
@@ -209,8 +210,8 @@ async function writeGoTrueEnv(config: GoTrueConfigResponse, state: AuthConfigSta
   }
 
   const env = toEnv(merged, {
-    templateBaseUrl: `${process.env.STUDIO_INTERNAL_URL ?? 'http://supabase-studio:3000'}/api/platform/auth/default/templates`,
-    apiExternalUrl: process.env.SUPABASE_PUBLIC_URL ?? '',
+    templateBaseUrl: `${process.env.STUDIO_INTERNAL_URL ?? 'http://supabase-studio:3000'}/api/platform/auth/${currentProjectRef()}/templates`,
+    apiExternalUrl: projectEnv('SUPABASE_PUBLIC_URL') ?? '',
   })
 
   await writeEnvFile(renderEnvFile(env), getConfigDir())

@@ -1,6 +1,8 @@
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { projectEnv } from '../project-context'
+
 /**
  * Studio's own record of the auth settings that were changed from the UI.
  *
@@ -14,7 +16,7 @@ export const STATE_FILE_NAME = 'auth-config.json'
 export type AuthConfigState = Record<string, unknown>
 
 export function getStateDir(): string {
-  return process.env.STUDIO_AUTH_STATE_DIR ?? '/var/lib/studio'
+  return projectEnv('STUDIO_AUTH_STATE_DIR') ?? '/var/lib/studio'
 }
 
 /** Distinguishes concurrent writes, so two saves in flight cannot share one temp file. */
