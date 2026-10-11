@@ -14,6 +14,8 @@
         "NEXT_PUBLIC_SUPPORT_ANON_KEY",
         "NEXT_PUBLIC_ENVIRONMENT",
         "NEXT_PUBLIC_IS_PLATFORM",
+        // Fork: the multi-project switcher (lib/constants/multi-project.ts).
+        "NEXT_PUBLIC_IS_MULTI_PROJECT",
         "NEXT_PUBLIC_SITE_URL",
         "NEXT_PUBLIC_API_URL",
         "NEXT_PUBLIC_DOCS_URL",

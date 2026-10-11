@@ -10,6 +10,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      multi_project:
+        description: Build the multi-project switcher in (NEXT_PUBLIC_IS_MULTI_PROJECT)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,6 +59,8 @@ jobs:
       # This fork pins it instead: only the Next routes are built and exercised
       # here, so a change to the Dockerfile's default must not silently start
       # shipping the TanStack build with no diff in this file to show for it.
+      # NEXT_PUBLIC_IS_MULTI_PROJECT is the fork's own ARG: `true` only when a
+      # manual run asks for it, so a push to main always builds it off.
       - id: build
         uses: docker/build-push-action@v6
         with:
@@ -64,6 +71,7 @@ jobs:
           push: true
           build-args: |
             STUDIO_FRAMEWORK=next
+            NEXT_PUBLIC_IS_MULTI_PROJECT=${{ inputs.multi_project && 'true' || 'false' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
