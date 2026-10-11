@@ -1,0 +1,26 @@
+{
+  "name": "control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Registry and Coolify provisioner for multi-project Studio (deploy/platform/SPEC.md).",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "vitest run",
+    "test:live": "LIVE=1 vitest run --silent=false --reporter=verbose test/provision.live.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.3",
+    "yaml": "^2.9.1"
+  }
+}

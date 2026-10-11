@@ -1,5 +1,7 @@
 packages:
   - apps/*
+  # Fork: standalone npm package with its own lockfile, kept out of pnpm-lock.yaml (FORK.md).
+  - '!apps/control-plane'
   - packages/*
   - blocks/*
   - e2e/*

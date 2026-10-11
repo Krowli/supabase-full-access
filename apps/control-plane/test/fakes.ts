@@ -1,0 +1,128 @@
+import type { Coolify, CoolifyService } from '../src/coolify.ts'
+import type { Project, ProjectStatus, ProjectUpdate, Registry } from '../src/registry.ts'
+import type { ProjectSecrets } from '../src/secrets.ts'
+
+export class MemoryRegistry implements Registry {
+  projects = new Map<string, Project>()
+  secrets = new Map<string, ProjectSecrets>()
+  statusHistory: { ref: string; status: ProjectStatus }[] = []
+
+  async insert(p: { ref: string; name: string }, secrets: ProjectSecrets) {
+    if (this.projects.has(p.ref)) throw new Error('duplicate key')
+    const now = new Date()
+    const project: Project = {
+      ...p,
+      status: 'CREATING',
+      coolify_service_uuid: null,
+      created_at: now,
+      updated_at: now,
+      last_error: null,
+    }
+    this.projects.set(p.ref, project)
+    this.secrets.set(p.ref, secrets)
+    this.statusHistory.push({ ref: p.ref, status: 'CREATING' })
+    return { ...project }
+  }
+  async get(ref: string) {
+    const p = this.projects.get(ref)
+    return p ? { ...p } : null
+  }
+  async list() {
+    return [...this.projects.values()].map((p) => ({ ...p }))
+  }
+  async listByStatus(statuses: ProjectStatus[]) {
+    return (await this.list()).filter((p) => statuses.includes(p.status))
+  }
+  async update(ref: string, update: ProjectUpdate) {
+    const p = this.projects.get(ref)
+    if (!p) return
+    Object.assign(p, update, { updated_at: new Date() })
+    if (update.status) this.statusHistory.push({ ref, status: update.status })
+  }
+  async getSecrets(ref: string) {
+    return this.secrets.get(ref) ?? null
+  }
+  async delete(ref: string) {
+    this.projects.delete(ref)
+    this.secrets.delete(ref)
+  }
+  async ping() {}
+}
+
+type FakeService = CoolifyService & { name: string; compose: string; envs: Record<string, string> }
+
+/**
+ * Coolify in memory. A started service reports `starting:unhealthy` for `pollsUntilHealthy`
+ * polls, then `running:healthy`. `failOnce` makes the next call of a method throw.
+ */
+export class FakeCoolify implements Coolify {
+  services = new Map<string, FakeService>()
+  calls: string[] = []
+  pollsUntilHealthy = 2
+  neverHealthy = false
+  failOnce = new Map<keyof Coolify, 'before' | 'after'>()
+  private polls = new Map<string, number>()
+  private seq = 0
+
+  private maybeFail(method: keyof Coolify, when: 'before' | 'after') {
+    if (this.failOnce.get(method) === when) {
+      this.failOnce.delete(method)
+      throw new Error(`simulated failure in ${method}`)
+    }
+  }
+
+  async findServiceByName(name: string) {
+    this.calls.push('findServiceByName')
+    return [...this.services.values()].find((s) => s.name === name)?.uuid ?? null
+  }
+  async createService(name: string, _description: string, compose: string) {
+    this.calls.push('createService')
+    this.maybeFail('createService', 'before')
+    const uuid = `svc${++this.seq}`
+    this.services.set(uuid, {
+      uuid,
+      name,
+      compose,
+      envs: {},
+      status: 'exited',
+      connectToDockerNetwork: false,
+    })
+    this.maybeFail('createService', 'after')
+    return uuid
+  }
+  async getService(uuid: string) {
+    this.calls.push('getService')
+    const s = this.services.get(uuid)
+    if (!s) return null
+    if (s.status === 'starting:unhealthy' && !this.neverHealthy) {
+      const n = (this.polls.get(uuid) ?? 0) + 1
+      this.polls.set(uuid, n)
+      if (n > this.pollsUntilHealthy) s.status = 'running:healthy'
+    }
+    return { uuid, status: s.status, connectToDockerNetwork: s.connectToDockerNetwork }
+  }
+  async connectToDockerNetwork(uuid: string) {
+    this.calls.push('connectToDockerNetwork')
+    this.maybeFail('connectToDockerNetwork', 'before')
+    this.must(uuid).connectToDockerNetwork = true
+  }
+  async setEnvs(uuid: string, envs: Record<string, string>) {
+    this.calls.push('setEnvs')
+    this.maybeFail('setEnvs', 'before')
+    Object.assign(this.must(uuid).envs, envs)
+  }
+  async start(uuid: string) {
+    this.calls.push('start')
+    this.maybeFail('start', 'before')
+    this.must(uuid).status = 'starting:unhealthy'
+  }
+  async deleteService(uuid: string) {
+    this.calls.push('deleteService')
+    this.services.delete(uuid)
+  }
+  private must(uuid: string) {
+    const s = this.services.get(uuid)
+    if (!s) throw new Error(`no service ${uuid}`)
+    return s
+  }
+}

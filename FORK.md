@@ -739,6 +739,9 @@ The conflicts land in the same few places:
   entries this fork added to files upstream keeps editing.
 - The gate edits, since upstream owns every file they sit in: the four in stage 1 and the fifteen
   in stage 2.
+- `pnpm-workspace.yaml` carries one added line, `'!apps/control-plane'`. It keeps the control
+  plane (`deploy/platform/SPEC.md`), a standalone npm package, out of the workspace and out of
+  `pnpm-lock.yaml`. Keep the line when upstream edits the `packages` list.
 
 Pushing `main` runs `.github/workflows/studio-fork-publish.yml`, which publishes
 `ghcr.io/krowli/supabase-full-access-studio:latest` and a dated `YYYY.MM.DD-sha-<sha>` tag. Wait
