@@ -12,6 +12,7 @@ import otpHandler from '../../../../pages/api/platform/auth/[ref]/otp'
 import createUserHandler from '../../../../pages/api/platform/auth/[ref]/users/index'
 import queryHandler from '../../../../pages/api/platform/pg-meta/[ref]/query/index'
 import configHandler from '../../../../pages/api/platform/projects/[ref]/config/index'
+import projectHandler from '../../../../pages/api/platform/projects/[ref]/index'
 import settingsHandler from '../../../../pages/api/platform/projects/[ref]/settings'
 import signHandler from '../../../../pages/api/platform/storage/[ref]/buckets/[id]/objects/sign'
 import bucketsHandler from '../../../../pages/api/platform/storage/[ref]/buckets/index'
@@ -230,6 +231,22 @@ describe('storage', () => {
 })
 
 describe('settings and keys', () => {
+  // The dashboard takes the ref for every later call from this response, not from the URL.
+  it('names proj1 in the project detail', async () => {
+    const res = await call(projectHandler, { query: { ref: 'proj1' } })
+
+    expect(res._getJSONData()).toMatchObject({
+      ref: 'proj1',
+      name: 'Project one',
+      restUrl: 'https://proj1.example.test/rest/v1/',
+    })
+  })
+
+  it('names default in the project detail', async () => {
+    const res = await call(projectHandler, { query: { ref: 'default' } })
+    expect(res._getJSONData()).toMatchObject({ ref: 'default' })
+  })
+
   it('reports proj1 settings, keys and JWT secret', async () => {
     const res = await call(settingsHandler, { query: { ref: 'proj1' } })
     const settings = res._getJSONData()

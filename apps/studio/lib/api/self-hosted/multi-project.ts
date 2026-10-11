@@ -40,6 +40,10 @@ export function projectAdminClient(): SupabaseClient {
   return client
 }
 
+/** The registry's name for the project, else the single-project name for `default` and the ref for any other. */
+const projectName = (ref: string, singleProjectName: string) =>
+  currentProjectName() ?? (ref === DEFAULT_PROJECT_REF ? singleProjectName : ref)
+
 /** The fields of `settings.ts`'s response that name the project. */
 type ProjectSettingsFields = {
   app_config: { endpoint: string; storage_endpoint: string; protocol?: string }
@@ -66,10 +70,24 @@ export function applyProjectSettings(settings: ProjectSettingsFields): void {
   settings.db_host = publicUrl.hostname
   settings.db_port = projectPostgres().port
   settings.jwt_secret = projectJwtSecret()
-  settings.name = currentProjectName() ?? (ref === DEFAULT_PROJECT_REF ? settings.name : ref)
+  settings.name = projectName(ref, settings.name)
   settings.ref = ref
   for (const key of settings.service_api_keys) {
     key.api_key =
       projectEnv(key.tags === 'anon' ? 'SUPABASE_ANON_KEY' : 'SUPABASE_SERVICE_KEY') ?? ''
   }
+}
+
+/**
+ * Rewrites `pages/api/platform/projects/[ref]/index.ts`'s project detail for this request's
+ * project. The dashboard reads the ref for every later call from this response rather than from
+ * the URL, so a detail that always says `default` would send project B's pages to project A.
+ */
+export function applyProjectDetail(detail: { ref: string; name: string; restUrl: string }): void {
+  const publicUrl = new URL(projectEnv('SUPABASE_PUBLIC_URL') || 'http://localhost:8000')
+  const ref = currentProjectRef()
+
+  detail.ref = ref
+  detail.name = projectName(ref, detail.name)
+  detail.restUrl = `${publicUrl.origin}/rest/v1/`
 }
