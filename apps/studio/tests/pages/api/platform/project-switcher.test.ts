@@ -174,7 +174,17 @@ describe('with a registry', () => {
 
     expect(pagination).toEqual({ count: 3, limit: 100, offset: 0 })
     expect(
-      projects.map(({ ref, name, databases }: any) => [ref, name, databases[0].identifier])
+      projects.map(
+        ({
+          ref,
+          name,
+          databases,
+        }: {
+          ref: string
+          name: string
+          databases: { identifier: string }[]
+        }) => [ref, name, databases[0].identifier]
+      )
     ).toEqual([
       ['alpha', 'Alpha shop', 'alpha'],
       ['beta', 'Beta blog', 'beta'],
@@ -207,7 +217,7 @@ describe('with a registry', () => {
   it('puts every project in the profile organization', async () => {
     const res = await call(profileHandler)
     const projects = res._getJSONData().organizations[0].projects
-    expect(projects.map(({ ref, name }: any) => [ref, name])).toEqual([
+    expect(projects.map(({ ref, name }: { ref: string; name: string }) => [ref, name])).toEqual([
       ['default', DEFAULT_PROJECT.name],
       ['alpha', 'Alpha shop'],
       ['beta', 'Beta blog'],
