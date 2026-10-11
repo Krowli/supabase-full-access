@@ -427,3 +427,152 @@ one `key-auth` consumer per project key with an `acl` group, `acl allow: [<ref>]
 
 Reload procedure for the control plane: write the new declarative file, `kong config parse`,
 then `kong reload`; never reload an unparsed file. **M0 is complete.**
+
+## 9. M4 status (2026-10-12, branch `platform/cp-service`)
+
+**What exists.**
+
+- `deploy/platform/project-compose.yaml`: the per-project stack, `supabase-db`, `supabase-auth`,
+  `supabase-rest` and `supabase-storage`, with the same images and settings as
+  `deploy/coolify/docker-compose.yaml`. The db gets the project-level init SQL as content mounts
+  (`webhooks.sql`, `roles.sql`, `jwt.sql`, copied from `docker/volumes/db/`, and a unit test
+  keeps the copies identical). The platform-level ones (`_supabase`, `realtime`, `pooler`,
+  `logs`) belong to the shared stack and are left out. No ports are published.
+  - `{{REF}}`, `{{PUBLIC_URL}}` and the storage target are rendered into the text before
+    upload.
+  - The secrets are Coolify env vars (`${PROJECT_DB_PASSWORD}`, `${PROJECT_JWT_SECRET}`,
+    `${PROJECT_ANON_KEY}`, `${PROJECT_SERVICE_KEY}`, `${S3_ACCESS_KEY}`, `${S3_SECRET_KEY}`), so
+    they never appear in the compose Coolify stores.
+- `apps/control-plane`: a Node 24 service in TypeScript that Node runs directly (type
+  stripping), with no framework (`node:http`) and one runtime dependency (`pg`).
+  - `src/secrets.ts`: the ref (20 lowercase letters), passwords, HS256 anon and service_role keys
+    (`iss: supabase`, `ref`, 10-year expiry), and AES-256-GCM with ref and column as associated
+    data.
+  - `src/registry.ts`: schema `_platform`, tables `projects` and `project_secrets` (every secret
+    column is ciphertext). The migration runs on start, is idempotent, and holds an advisory lock.
+  - `src/coolify.ts`: the seven Coolify calls the provisioner makes.
+  - `src/provisioner.ts`: the state machine.
+  - `src/server.ts`: the HTTP API.
+  - `Dockerfile`: build it from the repo root.
+
+**Provisioning steps.** Each step checks what already exists, so running it again finishes a
+run that stopped part-way:
+
+1. Status `CREATING`.
+2. Find the Coolify service named `<ref>` in the configured environment, or create it
+   (`POST /services`, `instant_deploy: false`). The uuid is saved.
+3. `PATCH connect_to_docker_network: true`.
+4. `PATCH /services/{uuid}/envs/bulk`. This upserts, so keys Coolify made while parsing are
+   overwritten.
+5. Status `COMING_UP`. `POST /start`, unless Coolify already reports `running|starting`.
+6. Poll `GET /services/{uuid}` every 5 s until `status == running:healthy`. The timeout is
+   `PROVISION_TIMEOUT_SECONDS`, default 600.
+7. Status `ACTIVE_HEALTHY`. Any error gives `FAILED` with `last_error`.
+
+On start, the service resumes every `CREATING` or `COMING_UP` row. `FAILED` waits for an
+explicit retry.
+
+Looking the service up by name is what stops duplicates: if the process dies after Coolify
+created the service but before the uuid was saved, the next run adopts that service instead of
+creating another.
+
+Delete sends `DELETE /services/{uuid}?delete_configurations&delete_volumes&docker_cleanup&delete_connected_networks`
+(all `true`) for the saved uuid and for any service found by name, then deletes the registry
+rows. Coolify answers 404 for the service at once and removes the containers about 7-40 s later.
+
+**HTTP API.** Every route needs `Authorization: Bearer $CONTROL_PLANE_TOKEN`, except `/health`.
+
+| Route | Result |
+|---|---|
+| `POST /projects {name}` | 201, the project in `CREATING`; provisioning continues in the background |
+| `POST /projects {ref}` | 202; re-runs provisioning of an existing project |
+| `GET /projects`, `GET /projects/:ref` | No secrets. Includes `endpoint` (`https://<ref>.<suffix>`) and the internal hosts `supabase-{db,auth,rest,storage}-<uuid>` |
+| `GET /projects/:ref/secrets` | `db_password`, `jwt_secret`, `anon_key`, `service_key`, for Studio's resolver (M1) |
+| `DELETE /projects/:ref` | 200; 409 while a provisioning run is in flight |
+| `GET /health` | 200 when the registry answers |
+
+**Config (env).**
+
+- Required:
+  - Coolify: `COOLIFY_URL` (including `/api/v1`), `COOLIFY_TOKEN`, `COOLIFY_PROJECT_UUID`,
+    `COOLIFY_ENVIRONMENT`, `COOLIFY_SERVER_UUID`.
+  - `REGISTRY_DATABASE_URL`.
+  - `PLATFORM_SECRETS_KEY`: 32 bytes, as hex or base64, for example `openssl rand -base64 32`.
+  - `CONTROL_PLANE_TOKEN`, `PROJECT_DOMAIN_SUFFIX`.
+- Storage: `PROJECT_STORAGE_BACKEND` is `s3` (the default and the target) or `file`.
+  - With `s3`, `PROJECT_S3_ENDPOINT`, `PROJECT_S3_ACCESS_KEY` and `PROJECT_S3_SECRET_KEY` are
+    required, and `PROJECT_S3_REGION` defaults to `us-east-1`. The bucket is the ref.
+  - `file` keeps objects in the project's `storage-data` volume. It is for testing only, until
+    MinIO is shared.
+- Optional: `PORT` (default 8080), `PROVISION_TIMEOUT_SECONDS`, `PROJECT_TEMPLATE_PATH`.
+
+**How to run.**
+
+```bash
+cd apps/control-plane
+NODE_ENV=development npm ci          # the shell may export NODE_ENV=production, which skips dev deps
+npm test                             # unit tests; registry tests also run if TEST_DATABASE_URL is set
+npm run typecheck
+npm run test:live                    # by hand only: real Coolify, server B, local Docker
+docker build -f apps/control-plane/Dockerfile -t control-plane .   # from the repo root
+```
+
+It is a standalone npm package (its own `package-lock.json`). A one-line exclusion in
+`pnpm-workspace.yaml` keeps it out of the pnpm workspace, so `pnpm-lock.yaml` and the daily
+upstream merge are untouched (FORK.md, "Updating from upstream").
+
+**Test results.**
+
+- **Unit tests: 37 pass** (vitest 5): 10 secrets, 6 template, 11 provisioner state machine with
+  an in-memory Coolify, 4 HTTP, and 3 registry against a throwaway Postgres 17. Without
+  `TEST_DATABASE_URL` it is 34 passed and 3 skipped. `tsc --noEmit` is clean.
+- **Live: 3 of 3 pass.** Run with `test/provision.live.test.ts` against Coolify 4.4.6 and
+  server B, in the temporary Coolify project "Tests", environment "control-plane". The registry
+  was a local Docker Postgres. Second run, timings:
+
+  | Scenario | Result |
+  |---|---|
+  | HTTP create to `ACTIVE_HEALTHY` | **18 s** (CREATING → COMING_UP → ACTIVE_HEALTHY). Coolify calls took about 1.3 s; the rest was containers starting and the health poll. All four images were already cached on B. |
+  | Checks from the `coolify` network on B (`docker run --network coolify curlimages/curl`) | PostgREST `/` with the project anon key: 200. With a key signed by another secret: 401. GoTrue `/health`: 200. storage `/bucket` with the service key: 200. |
+  | Server SIGKILLed right after the Coolify service was created | Registry `CREATING`, Coolify `exited`. On restart it resumed on its own (plus `POST {ref}`) and reached `ACTIVE_HEALTHY` in **12 s** with the same uuid. 1 Coolify service named ref. |
+  | Coolify created the service, but the uuid was never saved (fault injected in the client) | `FAILED`, uuid `null`. The re-run found the service by name and reached `ACTIVE_HEALTHY` in **12 s**. Still 1 service. |
+  | Delete | Coolify `GET` gives 404 at once. On B, the 4 containers, 5 volumes and 1 network were gone 7-39 s later. |
+
+  After the run, the "Tests" project was deleted. B has no containers, volumes, networks or
+  `/data/coolify/services/<uuid>` directories from the test, and the local registry container
+  is removed.
+
+**Deviations from §4.**
+
+- `coolify_service_uuid` lives in `projects`, not `project_secrets`. It is not a secret, and
+  `GET /projects/:ref` needs it.
+- `instant_deploy` is `false`, not `true`. The env vars must be set before the first start;
+  otherwise the stack would first boot without its secrets.
+- Image transformations are off in project storage (`ENABLE_IMAGE_TRANSFORMATION=false`) until
+  the shared imgproxy exists.
+- S3 is the target, but the live test used the `file` backend, because no shared MinIO exists
+  yet. The S3 path is covered only by the template tests.
+- GoTrue's `--config-dir /etc/gotrue` and storage's `/etc/studio-config` are per-service named
+  volumes for now. M3 swaps them for the `/data/pieowl/projects/<ref>/…` binds.
+- Runs are serialised per ref inside one process, so run exactly one control-plane instance.
+
+**What M5 needs (not part of M4).**
+
+- Register the tenant in the shared stack after `ACTIVE_HEALTHY`:
+  - Supavisor `PUT /api/tenants/<ref>`;
+  - Realtime `POST /api/tenants`;
+  - the Kong declarative entry (routes by `hosts: [<ref>.<suffix>]`, `key-auth` consumers for
+    the anon and service keys, an `acl` group per ref), with `kong config parse` before every
+    `kong reload`.
+
+  The bodies are in `spike/register.sh` and `spike/kong-test.sh`. Make each one a further
+  idempotent step after `ACTIVE_HEALTHY`, or a new status such as `REGISTERING`, and undo them
+  in delete.
+- Create a MinIO bucket `<ref>` and a scoped key. Then set `PROJECT_STORAGE_BACKEND=s3` and
+  point `PROJECT_S3_*` at the shared MinIO.
+- Set `IMGPROXY_URL` to the shared imgproxy and turn transformations back on.
+- Deploy the control plane itself as a Coolify service. It needs `connect_to_docker_network`,
+  the registry in the shared `_supabase` database, and an admin JWT secret for the Supavisor and
+  Realtime calls.
+- Cap the number of projects per server (§6 risk 7). B had about 3.2 GB available. The memory
+  one project stack uses was not measured.
