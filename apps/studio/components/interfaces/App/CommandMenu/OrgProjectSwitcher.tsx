@@ -6,6 +6,7 @@ import { PageType, useRegisterCommands, useRegisterPage, useSetPage } from 'ui-p
 import { COMMAND_MENU_SECTIONS } from './CommandMenu.utils'
 import { useOrganizationsQuery } from '@/data/organizations/organizations-query'
 import { useProjectsInfiniteQuery } from '@/data/projects/projects-infinite-query'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 
 const PROJECT_SWITCHER_PAGE_NAME = 'Switch project'
 const ORGANIZATION_SWITCHER_PAGE_NAME = 'Configure organization'
@@ -16,7 +17,8 @@ export function useProjectSwitchCommand() {
   // [Joshen] Using paginated data here which means we won't be showing all projects
   // Ideally we somehow support searching with Cmd K if we want to make this ideal
   // e.g Cmd K input to support async searching while in "switch project" state
-  const { data } = useProjectsInfiniteQuery({}, { enabled: IS_PLATFORM })
+  // Fork: also on a multi-project self-hosted Studio (deploy/platform/SPEC.md)
+  const { data } = useProjectsInfiniteQuery({}, { enabled: IS_PLATFORM || IS_MULTI_PROJECT })
   const projects = useMemo(() => data?.pages.flatMap((page) => page.projects), [data?.pages]) || []
 
   useRegisterPage(
