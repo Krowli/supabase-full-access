@@ -162,6 +162,11 @@ uses. If the compose you are editing writes `environment:` as a mapping instead,
 lines to `KEY: value` form — never mix the two styles under one service, because YAML will not
 parse a block that is half list and half mapping.
 
+The compose file in `deploy/coolify/` also swaps one image the Coolify template still uses:
+`minio-createbucket` runs on `ghcr.io/coollabsio/minio` instead of `quay.io/minio/mc`, which
+now answers `401 UNAUTHORIZED` to anonymous pulls. A server that already has the old image
+cached keeps working; a new one fails to start the whole service until this is changed.
+
 Notes on three of these:
 
 - `gotrue-config` is mounted read-only into `supabase-auth` and read-write into
