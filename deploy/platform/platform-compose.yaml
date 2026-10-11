@@ -1,5 +1,5 @@
 # The shared platform stack: one Coolify service on the database server (deploy/platform/SPEC.md
-# §5, §11). Project stacks (project-compose.yaml) are created by the control plane in this stack.
+# §5, §12). The control plane in this stack creates the project stacks (project-compose.yaml).
 #
 # Networking: the Coolify service has "Connect to Predefined Network" on (API:
 # connect_to_docker_network: true), so every container here also sits on the shared `coolify`
@@ -186,6 +186,8 @@ services:
   control-plane:
     # Built by .github/workflows/control-plane-publish.yml. deploy.sh fills in the tag.
     image: 'ghcr.io/krowli/supabase-control-plane:{{CONTROL_PLANE_TAG}}'
+    # Tags are immutable (sha-<commit>); an image built on the server is used as it is.
+    pull_policy: missing
     depends_on:
       platform-db:
         condition: service_healthy
