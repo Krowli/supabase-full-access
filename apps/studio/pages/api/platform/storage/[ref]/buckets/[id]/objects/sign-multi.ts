@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
 import { selfHostedSupabaseAdmin as supabase } from '@/lib/api/self-hosted-admin'
+import { projectEnv } from '@/lib/api/self-hosted/project-context'
 
 const wrappedHandler = (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
@@ -29,7 +30,7 @@ const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(400).json({ error: { message: error.message } })
   }
 
-  const parsed = new URL(process.env.SUPABASE_PUBLIC_URL!)
+  const parsed = new URL(projectEnv('SUPABASE_PUBLIC_URL')!)
   const remapped = (data ?? []).map((item) => {
     if (!item.signedUrl) return item
     const signedUrl = new URL(item.signedUrl)

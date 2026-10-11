@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next'
 import { fetchPost } from '@/data/fetchers'
 import { constructHeaders } from '@/lib/api/apiHelpers'
 import { apiWrapper } from '@/lib/api/apiWrapper'
+import { projectEnv } from '@/lib/api/self-hosted/project-context'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
@@ -22,9 +23,9 @@ const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
   const headers = constructHeaders({
     'Content-Type': 'application/json',
     Accept: 'application/json',
-    Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+    Authorization: `Bearer ${projectEnv('SUPABASE_SERVICE_KEY')}`,
   })
-  const url = `${process.env.SUPABASE_URL}/auth/v1/otp`
+  const url = `${projectEnv('SUPABASE_URL')}/auth/v1/otp`
   const payload = { phone: req.body.phone }
 
   const response = await fetchPost(url, payload, { headers })

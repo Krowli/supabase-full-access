@@ -9,6 +9,8 @@ import {
   POSTGRES_USER_READ_ONLY,
   POSTGRES_USER_READ_WRITE,
 } from './constants'
+import { projectConnectionString } from './multi-project'
+import { isMultiProject } from './project-context'
 import { IS_PLATFORM } from '@/lib/constants'
 
 /**
@@ -25,6 +27,7 @@ export function encryptString(stringToEncrypt: string): string {
 }
 
 export function getConnectionString({ readOnly }: { readOnly: boolean }) {
+  if (isMultiProject()) return projectConnectionString({ readOnly }) // Fork: per-project database
   const postgresUser = readOnly ? POSTGRES_USER_READ_ONLY : POSTGRES_USER_READ_WRITE
 
   return `postgresql://${postgresUser}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}`

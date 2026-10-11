@@ -1,6 +1,8 @@
 import { components } from 'api-types'
 
 import { AUTH_JWT_SECRET, POSTGRES_PORT } from './constants'
+import { applyProjectSettings } from './multi-project'
+import { isMultiProject } from './project-context'
 import { assertSelfHosted } from './util'
 import { PROJECT_DB_HOST, PROJECT_ENDPOINT, PROJECT_ENDPOINT_PROTOCOL } from '@/lib/constants/api'
 
@@ -56,5 +58,6 @@ export function getProjectSettings() {
     status: 'ACTIVE_HEALTHY',
   } satisfies ProjectSettings
 
+  if (isMultiProject()) applyProjectSettings(response) // Fork: per-project settings
   return response
 }
