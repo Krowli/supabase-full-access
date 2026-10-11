@@ -221,6 +221,7 @@ import { Route as ApiPlatformAuthRefRecoverRouteImport } from './routes/api/plat
 import { Route as ApiPlatformIntegrationsGithubAuthorizationRouteImport } from './routes/api/platform/integrations/github/authorization'
 import { Route as ApiPlatformIntegrationsGithubConnectionsRouteImport } from './routes/api/platform/integrations/github/connections'
 import { Route as ApiPlatformIntegrationsGithubRepositoriesRouteImport } from './routes/api/platform/integrations/github/repositories'
+import { Route as ApiPlatformOrganizationsSlugProjectsRouteImport } from './routes/api/platform/organizations/$slug/projects'
 import { Route as ApiPlatformPgMetaRefColumnPrivilegesRouteImport } from './routes/api/platform/pg-meta/$ref/column-privileges'
 import { Route as ApiPlatformPgMetaRefExtensionsRouteImport } from './routes/api/platform/pg-meta/$ref/extensions'
 import { Route as ApiPlatformPgMetaRefForeignTablesRouteImport } from './routes/api/platform/pg-meta/$ref/foreign-tables'
@@ -236,6 +237,7 @@ import { Route as ApiPlatformProjectsRefDatabasesRouteImport } from './routes/ap
 import { Route as ApiPlatformProjectsRefInfraMonitoringRouteImport } from './routes/api/platform/projects/$ref/infra-monitoring'
 import { Route as ApiPlatformProjectsRefRunLintsRouteImport } from './routes/api/platform/projects/$ref/run-lints'
 import { Route as ApiPlatformProjectsRefSettingsRouteImport } from './routes/api/platform/projects/$ref/settings'
+import { Route as ApiPlatformProjectsRefStatusRouteImport } from './routes/api/platform/projects/$ref/status'
 import { Route as ApiPlatformPropsOrgSlugRouteImport } from './routes/api/platform/props/org/$slug'
 import { Route as ApiV1ProjectsRefApiKeysRouteImport } from './routes/api/v1/projects/$ref/api-keys'
 import { Route as IntegrationsVercelSlugDeployButtonNewProjectRouteImport } from './routes/integrations/vercel/$slug/deploy-button/new-project'
@@ -1484,6 +1486,12 @@ const ApiPlatformIntegrationsGithubRepositoriesRoute =
     path: '/api/platform/integrations/github/repositories',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPlatformOrganizationsSlugProjectsRoute =
+  ApiPlatformOrganizationsSlugProjectsRouteImport.update({
+    id: '/api/platform/organizations/$slug/projects',
+    path: '/api/platform/organizations/$slug/projects',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPlatformPgMetaRefColumnPrivilegesRoute =
   ApiPlatformPgMetaRefColumnPrivilegesRouteImport.update({
     id: '/api/platform/pg-meta/$ref/column-privileges',
@@ -1572,6 +1580,12 @@ const ApiPlatformProjectsRefSettingsRoute =
   ApiPlatformProjectsRefSettingsRouteImport.update({
     id: '/api/platform/projects/$ref/settings',
     path: '/api/platform/projects/$ref/settings',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPlatformProjectsRefStatusRoute =
+  ApiPlatformProjectsRefStatusRouteImport.update({
+    id: '/api/platform/projects/$ref/status',
+    path: '/api/platform/projects/$ref/status',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiPlatformPropsOrgSlugRoute = ApiPlatformPropsOrgSlugRouteImport.update({
@@ -2424,6 +2438,7 @@ export interface FileRoutesByFullPath {
   '/api/platform/integrations/github/authorization': typeof ApiPlatformIntegrationsGithubAuthorizationRoute
   '/api/platform/integrations/github/connections': typeof ApiPlatformIntegrationsGithubConnectionsRoute
   '/api/platform/integrations/github/repositories': typeof ApiPlatformIntegrationsGithubRepositoriesRoute
+  '/api/platform/organizations/$slug/projects': typeof ApiPlatformOrganizationsSlugProjectsRoute
   '/api/platform/pg-meta/$ref/column-privileges': typeof ApiPlatformPgMetaRefColumnPrivilegesRoute
   '/api/platform/pg-meta/$ref/extensions': typeof ApiPlatformPgMetaRefExtensionsRoute
   '/api/platform/pg-meta/$ref/foreign-tables': typeof ApiPlatformPgMetaRefForeignTablesRoute
@@ -2438,6 +2453,7 @@ export interface FileRoutesByFullPath {
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
+  '/api/platform/projects/$ref/status': typeof ApiPlatformProjectsRefStatusRoute
   '/api/platform/props/org/$slug': typeof ApiPlatformPropsOrgSlugRoute
   '/api/v1/projects/$ref/api-keys': typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   '/integrations/vercel/$slug/deploy-button/new-project': typeof IntegrationsVercelSlugDeployButtonNewProjectRoute
@@ -2743,6 +2759,7 @@ export interface FileRoutesByTo {
   '/api/platform/integrations/github/authorization': typeof ApiPlatformIntegrationsGithubAuthorizationRoute
   '/api/platform/integrations/github/connections': typeof ApiPlatformIntegrationsGithubConnectionsRoute
   '/api/platform/integrations/github/repositories': typeof ApiPlatformIntegrationsGithubRepositoriesRoute
+  '/api/platform/organizations/$slug/projects': typeof ApiPlatformOrganizationsSlugProjectsRoute
   '/api/platform/pg-meta/$ref/column-privileges': typeof ApiPlatformPgMetaRefColumnPrivilegesRoute
   '/api/platform/pg-meta/$ref/extensions': typeof ApiPlatformPgMetaRefExtensionsRoute
   '/api/platform/pg-meta/$ref/foreign-tables': typeof ApiPlatformPgMetaRefForeignTablesRoute
@@ -2757,6 +2774,7 @@ export interface FileRoutesByTo {
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
+  '/api/platform/projects/$ref/status': typeof ApiPlatformProjectsRefStatusRoute
   '/api/platform/props/org/$slug': typeof ApiPlatformPropsOrgSlugRoute
   '/api/v1/projects/$ref/api-keys': typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   '/integrations/vercel/$slug/deploy-button/new-project': typeof IntegrationsVercelSlugDeployButtonNewProjectRoute
@@ -3080,6 +3098,7 @@ export interface FileRoutesById {
   '/api/platform/integrations/github/authorization': typeof ApiPlatformIntegrationsGithubAuthorizationRoute
   '/api/platform/integrations/github/connections': typeof ApiPlatformIntegrationsGithubConnectionsRoute
   '/api/platform/integrations/github/repositories': typeof ApiPlatformIntegrationsGithubRepositoriesRoute
+  '/api/platform/organizations/$slug/projects': typeof ApiPlatformOrganizationsSlugProjectsRoute
   '/api/platform/pg-meta/$ref/column-privileges': typeof ApiPlatformPgMetaRefColumnPrivilegesRoute
   '/api/platform/pg-meta/$ref/extensions': typeof ApiPlatformPgMetaRefExtensionsRoute
   '/api/platform/pg-meta/$ref/foreign-tables': typeof ApiPlatformPgMetaRefForeignTablesRoute
@@ -3094,6 +3113,7 @@ export interface FileRoutesById {
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
+  '/api/platform/projects/$ref/status': typeof ApiPlatformProjectsRefStatusRoute
   '/api/platform/props/org/$slug': typeof ApiPlatformPropsOrgSlugRoute
   '/api/v1/projects/$ref/api-keys': typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   '/integrations/vercel/$slug/deploy-button/new-project': typeof IntegrationsVercelSlugDeployButtonNewProjectRoute
@@ -3416,6 +3436,7 @@ export interface FileRouteTypes {
     | '/api/platform/integrations/github/authorization'
     | '/api/platform/integrations/github/connections'
     | '/api/platform/integrations/github/repositories'
+    | '/api/platform/organizations/$slug/projects'
     | '/api/platform/pg-meta/$ref/column-privileges'
     | '/api/platform/pg-meta/$ref/extensions'
     | '/api/platform/pg-meta/$ref/foreign-tables'
@@ -3430,6 +3451,7 @@ export interface FileRouteTypes {
     | '/api/platform/projects/$ref/infra-monitoring'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
+    | '/api/platform/projects/$ref/status'
     | '/api/platform/props/org/$slug'
     | '/api/v1/projects/$ref/api-keys'
     | '/integrations/vercel/$slug/deploy-button/new-project'
@@ -3735,6 +3757,7 @@ export interface FileRouteTypes {
     | '/api/platform/integrations/github/authorization'
     | '/api/platform/integrations/github/connections'
     | '/api/platform/integrations/github/repositories'
+    | '/api/platform/organizations/$slug/projects'
     | '/api/platform/pg-meta/$ref/column-privileges'
     | '/api/platform/pg-meta/$ref/extensions'
     | '/api/platform/pg-meta/$ref/foreign-tables'
@@ -3749,6 +3772,7 @@ export interface FileRouteTypes {
     | '/api/platform/projects/$ref/infra-monitoring'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
+    | '/api/platform/projects/$ref/status'
     | '/api/platform/props/org/$slug'
     | '/api/v1/projects/$ref/api-keys'
     | '/integrations/vercel/$slug/deploy-button/new-project'
@@ -4071,6 +4095,7 @@ export interface FileRouteTypes {
     | '/api/platform/integrations/github/authorization'
     | '/api/platform/integrations/github/connections'
     | '/api/platform/integrations/github/repositories'
+    | '/api/platform/organizations/$slug/projects'
     | '/api/platform/pg-meta/$ref/column-privileges'
     | '/api/platform/pg-meta/$ref/extensions'
     | '/api/platform/pg-meta/$ref/foreign-tables'
@@ -4085,6 +4110,7 @@ export interface FileRouteTypes {
     | '/api/platform/projects/$ref/infra-monitoring'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
+    | '/api/platform/projects/$ref/status'
     | '/api/platform/props/org/$slug'
     | '/api/v1/projects/$ref/api-keys'
     | '/integrations/vercel/$slug/deploy-button/new-project'
@@ -4262,6 +4288,7 @@ export interface RootRouteChildren {
   ApiPlatformIntegrationsGithubAuthorizationRoute: typeof ApiPlatformIntegrationsGithubAuthorizationRoute
   ApiPlatformIntegrationsGithubConnectionsRoute: typeof ApiPlatformIntegrationsGithubConnectionsRoute
   ApiPlatformIntegrationsGithubRepositoriesRoute: typeof ApiPlatformIntegrationsGithubRepositoriesRoute
+  ApiPlatformOrganizationsSlugProjectsRoute: typeof ApiPlatformOrganizationsSlugProjectsRoute
   ApiPlatformPgMetaRefColumnPrivilegesRoute: typeof ApiPlatformPgMetaRefColumnPrivilegesRoute
   ApiPlatformPgMetaRefExtensionsRoute: typeof ApiPlatformPgMetaRefExtensionsRoute
   ApiPlatformPgMetaRefForeignTablesRoute: typeof ApiPlatformPgMetaRefForeignTablesRoute
@@ -4276,6 +4303,7 @@ export interface RootRouteChildren {
   ApiPlatformProjectsRefInfraMonitoringRoute: typeof ApiPlatformProjectsRefInfraMonitoringRoute
   ApiPlatformProjectsRefRunLintsRoute: typeof ApiPlatformProjectsRefRunLintsRoute
   ApiPlatformProjectsRefSettingsRoute: typeof ApiPlatformProjectsRefSettingsRoute
+  ApiPlatformProjectsRefStatusRoute: typeof ApiPlatformProjectsRefStatusRoute
   ApiPlatformPropsOrgSlugRoute: typeof ApiPlatformPropsOrgSlugRoute
   ApiV1ProjectsRefApiKeysRoute: typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   ApiPlatformProjectsRefIndexRoute: typeof ApiPlatformProjectsRefIndexRoute
@@ -5819,6 +5847,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPlatformIntegrationsGithubRepositoriesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/platform/organizations/$slug/projects': {
+      id: '/api/platform/organizations/$slug/projects'
+      path: '/api/platform/organizations/$slug/projects'
+      fullPath: '/api/platform/organizations/$slug/projects'
+      preLoaderRoute: typeof ApiPlatformOrganizationsSlugProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/platform/pg-meta/$ref/column-privileges': {
       id: '/api/platform/pg-meta/$ref/column-privileges'
       path: '/api/platform/pg-meta/$ref/column-privileges'
@@ -5922,6 +5957,13 @@ declare module '@tanstack/react-router' {
       path: '/api/platform/projects/$ref/settings'
       fullPath: '/api/platform/projects/$ref/settings'
       preLoaderRoute: typeof ApiPlatformProjectsRefSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/platform/projects/$ref/status': {
+      id: '/api/platform/projects/$ref/status'
+      path: '/api/platform/projects/$ref/status'
+      fullPath: '/api/platform/projects/$ref/status'
+      preLoaderRoute: typeof ApiPlatformProjectsRefStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/platform/props/org/$slug': {
@@ -7492,6 +7534,8 @@ const rootRouteChildren: RootRouteChildren = {
     ApiPlatformIntegrationsGithubConnectionsRoute,
   ApiPlatformIntegrationsGithubRepositoriesRoute:
     ApiPlatformIntegrationsGithubRepositoriesRoute,
+  ApiPlatformOrganizationsSlugProjectsRoute:
+    ApiPlatformOrganizationsSlugProjectsRoute,
   ApiPlatformPgMetaRefColumnPrivilegesRoute:
     ApiPlatformPgMetaRefColumnPrivilegesRoute,
   ApiPlatformPgMetaRefExtensionsRoute: ApiPlatformPgMetaRefExtensionsRoute,
@@ -7510,6 +7554,7 @@ const rootRouteChildren: RootRouteChildren = {
     ApiPlatformProjectsRefInfraMonitoringRoute,
   ApiPlatformProjectsRefRunLintsRoute: ApiPlatformProjectsRefRunLintsRoute,
   ApiPlatformProjectsRefSettingsRoute: ApiPlatformProjectsRefSettingsRoute,
+  ApiPlatformProjectsRefStatusRoute: ApiPlatformProjectsRefStatusRoute,
   ApiPlatformPropsOrgSlugRoute: ApiPlatformPropsOrgSlugRoute,
   ApiV1ProjectsRefApiKeysRoute: ApiV1ProjectsRefApiKeysRouteWithChildren,
   ApiPlatformProjectsRefIndexRoute: ApiPlatformProjectsRefIndexRoute,
