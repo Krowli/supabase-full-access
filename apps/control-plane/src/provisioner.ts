@@ -1,6 +1,9 @@
 import type { Coolify } from './coolify.ts'
+import type { Gateway } from './kong.ts'
+import type { ObjectStorage } from './minio.ts'
 import type { Project, Registry } from './registry.ts'
 import { generateProjectSecrets, generateRef, type ProjectSecrets } from './secrets.ts'
+import type { TenantRegistry } from './tenants.ts'
 
 export type ProvisionerDeps = {
   registry: Registry
@@ -9,10 +12,20 @@ export type ProvisionerDeps = {
   renderCompose: (ref: string) => string
   /** The Coolify env vars the compose reads as ${NAME}. */
   serviceEnvs: (secrets: ProjectSecrets) => Record<string, string>
+  /** The shared services each project is registered in (SPEC.md §5). */
+  storage: ObjectStorage
+  pooler: TenantRegistry
+  realtime: TenantRegistry
+  gateway: Gateway
   healthTimeoutMs: number
   pollIntervalMs: number
   log?: (event: string, fields: Record<string, unknown>) => void
   sleep?: (ms: number) => Promise<void>
+}
+
+/** The projects Kong routes and the public gateway issues certificates for. */
+export function routedProjects(projects: Project[]): Project[] {
+  return projects.filter((p) => p.coolify_service_uuid && p.status !== 'DELETING')
 }
 
 export class ConflictError extends Error {}
@@ -21,14 +34,20 @@ export class NotFoundError extends Error {}
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /**
- * Creates and deletes project stacks in Coolify. Every step checks what already exists, so a
- * run that stopped anywhere (error, crash, restart) is finished by running provision() again:
+ * Creates and deletes project stacks in Coolify and registers them in the shared services.
+ * Every step checks what already exists, so a run that stopped anywhere (error, crash,
+ * restart) is finished by running provision() again. `step` in the registry names the step
+ * that ran last; with FAILED it is the one that failed.
  *
- *   CREATING:   find or create the Coolify service (by name = ref, so a crash between Coolify's
- *               response and saving the uuid cannot make a duplicate), connect it to the
- *               `coolify` network, set the env vars.
- *   COMING_UP:  start it unless it is already up, then poll Coolify until running:healthy.
- *   ACTIVE_HEALTHY, or FAILED with last_error.
+ *   CREATING:   coolify_service (find or create by name = ref, so a crash between Coolify's
+ *               response and saving the uuid cannot make a duplicate), network (join `coolify`),
+ *               storage (MinIO bucket <ref> and its scoped key), envs.
+ *   COMING_UP:  start (unless already up), health (poll Coolify until running:healthy),
+ *               pooler (Supavisor tenant), realtime (Realtime tenant), gateway (Kong config).
+ *   ACTIVE_HEALTHY, or FAILED with step and last_error.
+ *
+ * Delete runs the same in reverse under DELETING and stays DELETING with last_error until a
+ * repeated delete gets through.
  *
  * One instance per registry: runs are serialised per ref in this process only.
  */
@@ -74,36 +93,61 @@ export class Provisioner {
 
   private async runSteps(ref: string): Promise<void> {
     const { registry, coolify } = this.deps
+    let current = 'load'
+    const step = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      current = name
+      await registry.update(ref, { step: name })
+      return fn()
+    }
     try {
       const project = await registry.get(ref)
       if (!project) throw new NotFoundError(`Project ${ref} not found`)
       if (project.status === 'ACTIVE_HEALTHY') return
+      if (project.status === 'DELETING') throw new ConflictError(`Project ${ref} is being deleted`)
       await registry.update(ref, { status: 'CREATING', last_error: null })
-
-      const uuid = await this.ensureService(project)
-      await coolify.connectToDockerNetwork(uuid)
       const secrets = await registry.getSecrets(ref)
       if (!secrets) throw new Error(`Secrets for ${ref} are missing`)
-      await coolify.setEnvs(uuid, this.deps.serviceEnvs(secrets))
+
+      const uuid = await step('coolify_service', () => this.ensureService(project))
+      await step('network', () => coolify.connectToDockerNetwork(uuid))
+      await step('storage', () =>
+        this.deps.storage.ensureBucket(ref, secrets.s3_access_key, secrets.s3_secret_key)
+      )
+      await step('envs', () => coolify.setEnvs(uuid, this.deps.serviceEnvs(secrets)))
       this.log('project.configured', { ref, uuid })
 
       await registry.update(ref, { status: 'COMING_UP' })
-      const current = await coolify.getService(uuid)
-      if (!current) throw new Error(`Coolify service ${uuid} disappeared`)
-      if (/^(running|starting|restarting)/.test(current.status)) {
-        this.log('project.start_skipped', { ref, uuid, status: current.status })
-      } else {
-        await coolify.start(uuid)
-        this.log('project.start_queued', { ref, uuid })
-      }
-      await this.waitHealthy(uuid)
+      await step('start', async () => {
+        const service = await coolify.getService(uuid)
+        if (!service) throw new Error(`Coolify service ${uuid} disappeared`)
+        if (/^(running|starting|restarting)/.test(service.status)) {
+          this.log('project.start_skipped', { ref, uuid, status: service.status })
+        } else {
+          await coolify.start(uuid)
+          this.log('project.start_queued', { ref, uuid })
+        }
+      })
+      await step('health', () => this.waitHealthy(uuid))
 
-      await registry.update(ref, { status: 'ACTIVE_HEALTHY', last_error: null })
+      const target = {
+        ref,
+        dbHost: `supabase-db-${uuid}`,
+        dbPassword: secrets.db_password,
+        jwtSecret: secrets.jwt_secret,
+      }
+      await step('pooler', () => this.deps.pooler.ensure(target))
+      await step('realtime', () => this.deps.realtime.ensure(target))
+      await step('gateway', () => this.deps.gateway.sync())
+
+      await registry.update(ref, { status: 'ACTIVE_HEALTHY', step: null, last_error: null })
       this.log('project.healthy', { ref, uuid })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      this.log('project.failed', { ref, error: message })
-      await registry.update(ref, { status: 'FAILED', last_error: message }).catch(() => {})
+      this.log('project.failed', { ref, step: current, error: message })
+      if (err instanceof ConflictError || err instanceof NotFoundError) return
+      await registry
+        .update(ref, { status: 'FAILED', step: current, last_error: message })
+        .catch(() => {})
     }
   }
 
@@ -145,24 +189,58 @@ export class Provisioner {
   }
 
   /**
-   * Deletes the Coolify service (with volumes, networks and configuration) and the registry
-   * rows. Coolify removes the containers asynchronously after it accepts the request.
+   * Removes the project from Kong, Realtime and Supavisor, deletes the Coolify service (with
+   * volumes, networks and configuration), the MinIO bucket and key, then the registry rows.
+   * Coolify removes the containers asynchronously after it accepts the request. A failure
+   * leaves DELETING with step and last_error; calling delete again continues.
    */
   async delete(ref: string): Promise<void> {
-    const { registry, coolify } = this.deps
     if (this.running.has(ref)) throw new ConflictError(`Project ${ref} is being provisioned`)
+    const run = this.runDelete(ref).finally(() => this.running.delete(ref))
+    this.running.set(
+      ref,
+      run.catch(() => {})
+    )
+    return run
+  }
+
+  private async runDelete(ref: string): Promise<void> {
+    const { registry, coolify } = this.deps
     const project = await registry.get(ref)
     if (!project) throw new NotFoundError(`Project ${ref} not found`)
-
-    const uuids = new Set<string>()
-    if (project.coolify_service_uuid) uuids.add(project.coolify_service_uuid)
-    const byName = await coolify.findServiceByName(ref)
-    if (byName) uuids.add(byName)
-    for (const uuid of uuids) {
-      if (await coolify.getService(uuid)) {
-        await coolify.deleteService(uuid)
-        this.log('project.service_deleted', { ref, uuid })
+    const secrets = await registry.getSecrets(ref)
+    let current = 'gateway'
+    const step = async (name: string, fn: () => Promise<void>) => {
+      current = name
+      await registry.update(ref, { step: name })
+      await fn()
+    }
+    try {
+      // DELETING takes the project out of the Kong config first, so traffic stops.
+      await registry.update(ref, { status: 'DELETING', last_error: null })
+      await step('gateway', () => this.deps.gateway.sync())
+      await step('realtime', () => this.deps.realtime.remove(ref))
+      await step('pooler', () => this.deps.pooler.remove(ref))
+      await step('coolify_service', async () => {
+        const uuids = new Set<string>()
+        if (project.coolify_service_uuid) uuids.add(project.coolify_service_uuid)
+        const byName = await coolify.findServiceByName(ref)
+        if (byName) uuids.add(byName)
+        for (const uuid of uuids) {
+          if (await coolify.getService(uuid)) {
+            await coolify.deleteService(uuid)
+            this.log('project.service_deleted', { ref, uuid })
+          }
+        }
+      })
+      if (secrets) {
+        await step('storage', () => this.deps.storage.removeBucket(ref, secrets.s3_access_key))
       }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.log('project.delete_failed', { ref, step: current, error: message })
+      await registry.update(ref, { step: current, last_error: message }).catch(() => {})
+      throw err
     }
     await registry.delete(ref)
     this.log('project.deleted', { ref })

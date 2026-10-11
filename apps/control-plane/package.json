@@ -10,7 +10,6 @@
   "scripts": {
     "start": "node src/main.ts",
     "test": "vitest run",
-    "test:live": "LIVE=1 vitest run --silent=false --reporter=verbose test/provision.live.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

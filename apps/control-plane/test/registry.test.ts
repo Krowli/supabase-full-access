@@ -48,9 +48,19 @@ describe.skipIf(!url)('Postgres registry', () => {
   it('updates, lists by status, rejects unknown statuses and cascades deletes', async () => {
     const ref = generateRef()
     await registry.insert({ ref, name: 'Two' }, generateProjectSecrets(ref))
-    await registry.update(ref, { status: 'FAILED', last_error: 'boom', coolify_service_uuid: 'u1' })
+    await registry.update(ref, {
+      status: 'FAILED',
+      step: 'pooler',
+      last_error: 'boom',
+      coolify_service_uuid: 'u1',
+    })
     const p = (await registry.get(ref))!
-    expect(p).toMatchObject({ status: 'FAILED', last_error: 'boom', coolify_service_uuid: 'u1' })
+    expect(p).toMatchObject({
+      status: 'FAILED',
+      step: 'pooler',
+      last_error: 'boom',
+      coolify_service_uuid: 'u1',
+    })
     expect(p.updated_at.getTime()).toBeGreaterThanOrEqual(p.created_at.getTime())
     expect((await registry.listByStatus(['FAILED'])).map((x) => x.ref)).toContain(ref)
     await expect(registry.update(ref, { status: 'NOPE' as never })).rejects.toThrow()

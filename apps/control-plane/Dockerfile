@@ -1,6 +1,9 @@
 # Build from the repo root, so the project template is in the context:
 #   docker build -f apps/control-plane/Dockerfile -t control-plane .
 FROM node:24-alpine
+# MinIO's client, for buckets and scoped keys (src/minio.ts). Same image and mc as the fork's
+# minio-createbucket; a static Go binary.
+COPY --from=ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z /usr/bin/mc /usr/local/bin/mc
 WORKDIR /app/apps/control-plane
 COPY apps/control-plane/package.json apps/control-plane/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force

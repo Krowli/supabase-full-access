@@ -2,18 +2,21 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { ConflictError, NotFoundError, Provisioner } from '../src/provisioner.ts'
 import { generateProjectSecrets } from '../src/secrets.ts'
-import { FakeCoolify, MemoryRegistry } from './fakes.ts'
+import { fakeShared, FakeCoolify, MemoryRegistry } from './fakes.ts'
 
 let registry: MemoryRegistry
 let coolify: FakeCoolify
+let shared: ReturnType<typeof fakeShared>
 let provisioner: Provisioner
 
 beforeEach(() => {
   registry = new MemoryRegistry()
   coolify = new FakeCoolify()
+  shared = fakeShared(registry)
   provisioner = new Provisioner({
     registry,
     coolify,
+    ...shared,
     renderCompose: (ref) => `compose for ${ref}`,
     serviceEnvs: (s) => ({ PROJECT_DB_PASSWORD: s.db_password, PROJECT_JWT_SECRET: s.jwt_secret }),
     healthTimeoutMs: 60_000,
@@ -53,11 +56,28 @@ describe('create', () => {
     expect(order).toEqual(['createService', 'connectToDockerNetwork', 'setEnvs', 'start'])
   })
 
+  it('registers the project in MinIO, Supavisor, Realtime and Kong', async () => {
+    const p = await createAndWait()
+    const secrets = (await registry.getSecrets(p.ref))!
+    expect(p.step).toBeNull()
+    expect(shared.storage.buckets.get(p.ref)).toBe(secrets.s3_access_key)
+    const target = {
+      ref: p.ref,
+      dbHost: `supabase-db-${p.coolify_service_uuid}`,
+      dbPassword: secrets.db_password,
+      jwtSecret: secrets.jwt_secret,
+    }
+    expect(shared.pooler.tenants.get(p.ref)).toEqual(target)
+    expect(shared.realtime.tenants.get(p.ref)).toEqual(target)
+    expect(shared.gateway.routed).toEqual([p.ref])
+  })
+
   it('ends FAILED with last_error when the stack never becomes healthy', async () => {
     coolify.neverHealthy = true
     provisioner = new Provisioner({
       registry,
       coolify,
+      ...shared,
       renderCompose: () => 'c',
       serviceEnvs: () => ({}),
       healthTimeoutMs: 20,
@@ -79,6 +99,28 @@ describe('create', () => {
 })
 
 describe('resuming after a failure', () => {
+  it.each([
+    ['storage', 'storage'],
+    ['pooler', 'pooler'],
+    ['realtime', 'realtime'],
+    ['gateway', 'gateway'],
+  ] as const)(
+    'a failure in the %s service leaves FAILED at step %s, and a re-run finishes',
+    async (service, step) => {
+      shared[service].failNext = true
+      const failed = await createAndWait()
+      expect(failed).toMatchObject({ status: 'FAILED', step })
+      expect(failed.last_error).toContain('simulated failure')
+
+      await provisioner.provision(failed.ref)
+      const p = (await registry.get(failed.ref))!
+      expect(p).toMatchObject({ status: 'ACTIVE_HEALTHY', step: null, last_error: null })
+      expect(coolify.services.size).toBe(1)
+      expect(shared.realtime.tenants.has(p.ref)).toBe(true)
+      expect(shared.gateway.routed).toEqual([p.ref])
+    }
+  )
+
   it.each([
     ['connectToDockerNetwork', 'before'],
     ['setEnvs', 'before'],
@@ -159,12 +201,34 @@ describe('resuming after a failure', () => {
 })
 
 describe('delete', () => {
-  it('deletes the Coolify service and the registry rows', async () => {
+  it('deletes the Coolify service, the shared-service registrations and the registry rows', async () => {
     const p = await createAndWait()
+    const other = await createAndWait('Other')
     await provisioner.delete(p.ref)
-    expect(coolify.services.size).toBe(0)
+    expect(coolify.services.size).toBe(1)
     expect(await registry.get(p.ref)).toBeNull()
     expect(await registry.getSecrets(p.ref)).toBeNull()
+    expect(shared.gateway.routed).toEqual([other.ref])
+    expect([...shared.pooler.tenants.keys()]).toEqual([other.ref])
+    expect([...shared.realtime.tenants.keys()]).toEqual([other.ref])
+    expect([...shared.storage.buckets.keys()]).toEqual([other.ref])
+  })
+
+  it('a failure part-way leaves DELETING with the step, and deleting again finishes', async () => {
+    const p = await createAndWait()
+    shared.realtime.failNext = true
+    await expect(provisioner.delete(p.ref)).rejects.toThrow(/simulated failure/)
+    const stuck = (await registry.get(p.ref))!
+    expect(stuck).toMatchObject({ status: 'DELETING', step: 'realtime' })
+    expect(shared.gateway.routed).toEqual([])
+
+    await provisioner.provision(p.ref)
+    expect((await registry.get(p.ref))!.status).toBe('DELETING')
+
+    await provisioner.delete(p.ref)
+    expect(await registry.get(p.ref)).toBeNull()
+    expect(coolify.services.size).toBe(0)
+    expect(shared.storage.buckets.size).toBe(0)
   })
 
   it('finds the service by name when its uuid was never saved', async () => {

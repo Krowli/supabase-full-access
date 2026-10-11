@@ -2,17 +2,22 @@ import { readFileSync } from 'node:fs'
 
 import type { ProjectSecrets } from './secrets.ts'
 
-export type StorageTarget =
-  | { backend: 's3'; endpoint: string; region: string; accessKey: string; secretKey: string }
-  | { backend: 'file' }
+/** Shared services as the project stacks reach them on the `coolify` network. */
+export type SharedEndpoints = {
+  /** The shared MinIO, e.g. http://minio-<platform-uuid>:9000. Each project gets bucket <ref>. */
+  s3Endpoint: string
+  s3Region: string
+  /** The shared imgproxy, e.g. http://imgproxy-<platform-uuid>:8080. */
+  imgproxyUrl: string
+}
 
 export type TemplateValues = {
   REF: string
   PUBLIC_URL: string
-  STORAGE_BACKEND: string
   S3_BUCKET: string
   S3_ENDPOINT: string
   S3_REGION: string
+  IMGPROXY_URL: string
 }
 
 // Values land in list-style compose lines (`- KEY=value`), so only characters that cannot
@@ -38,29 +43,26 @@ export function renderTemplate(template: string, values: TemplateValues): string
 export function templateValues(
   ref: string,
   domainSuffix: string,
-  storage: StorageTarget
+  shared: SharedEndpoints
 ): TemplateValues {
   return {
     REF: ref,
     PUBLIC_URL: `https://${ref}.${domainSuffix}`,
-    STORAGE_BACKEND: storage.backend,
     S3_BUCKET: ref,
-    S3_ENDPOINT: storage.backend === 's3' ? storage.endpoint : '',
-    S3_REGION: storage.backend === 's3' ? storage.region : '',
+    S3_ENDPOINT: shared.s3Endpoint,
+    S3_REGION: shared.s3Region,
+    IMGPROXY_URL: shared.imgproxyUrl,
   }
 }
 
 /** The Coolify env vars the template reads as ${NAME}. Secrets go here, never into the compose. */
-export function serviceEnvs(
-  secrets: ProjectSecrets,
-  storage: StorageTarget
-): Record<string, string> {
+export function serviceEnvs(secrets: ProjectSecrets): Record<string, string> {
   return {
     PROJECT_DB_PASSWORD: secrets.db_password,
     PROJECT_JWT_SECRET: secrets.jwt_secret,
     PROJECT_ANON_KEY: secrets.anon_key,
     PROJECT_SERVICE_KEY: secrets.service_key,
-    S3_ACCESS_KEY: storage.backend === 's3' ? storage.accessKey : '',
-    S3_SECRET_KEY: storage.backend === 's3' ? storage.secretKey : '',
+    S3_ACCESS_KEY: secrets.s3_access_key,
+    S3_SECRET_KEY: secrets.s3_secret_key,
   }
 }

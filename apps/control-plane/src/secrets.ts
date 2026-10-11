@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomInt } from 'node:crypto'
 
 const LOWER = 'abcdefghijklmnopqrstuvwxyz'
+const UPPER_DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
 const TEN_YEARS_S = 10 * 365 * 24 * 60 * 60
 
@@ -9,9 +10,19 @@ export type ProjectSecrets = {
   jwt_secret: string
   anon_key: string
   service_key: string
+  /** The project's MinIO access key, scoped to its own bucket (src/minio.ts). */
+  s3_access_key: string
+  s3_secret_key: string
 }
 
-export const SECRET_COLUMNS = ['db_password', 'jwt_secret', 'anon_key', 'service_key'] as const
+export const SECRET_COLUMNS = [
+  'db_password',
+  'jwt_secret',
+  'anon_key',
+  'service_key',
+  's3_access_key',
+  's3_secret_key',
+] as const
 
 function randomString(alphabet: string, length: number): string {
   let out = ''
@@ -48,6 +59,9 @@ export function generateProjectSecrets(ref: string, now = new Date()): ProjectSe
     jwt_secret,
     anon_key: key('anon'),
     service_key: key('service_role'),
+    // MinIO limits access keys to 20 characters and secret keys to 40.
+    s3_access_key: randomString(UPPER_DIGITS, 20),
+    s3_secret_key: generatePassword(40),
   }
 }
 

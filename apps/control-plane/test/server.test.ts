@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { Provisioner } from '../src/provisioner.ts'
 import { createApp } from '../src/server.ts'
-import { FakeCoolify, MemoryRegistry } from './fakes.ts'
+import { fakeShared, FakeCoolify, MemoryRegistry } from './fakes.ts'
 
 const TOKEN = 'test-token'
 const registry = new MemoryRegistry()
@@ -11,6 +11,7 @@ const coolify = new FakeCoolify()
 const provisioner = new Provisioner({
   registry,
   coolify,
+  ...fakeShared(registry),
   renderCompose: () => 'c',
   serviceEnvs: () => ({}),
   healthTimeoutMs: 60_000,
@@ -46,6 +47,16 @@ describe('HTTP API', () => {
     expect((await api('/projects', {}, null)).status).toBe(401)
     expect((await api('/projects', {}, 'wrong-token')).status).toBe(401)
     expect((await api('/projects')).status).toBe(200)
+  })
+
+  it('lists the hostnames of routed projects at /hosts without a token', async () => {
+    const { project, done } = await provisioner.create('Hosts')
+    await done
+    const res = await api('/hosts', {}, null)
+    expect(res.status).toBe(200)
+    expect((await res.text()).split('\n')).toContain(`${project.ref}.supa.example.com`)
+    await provisioner.delete(project.ref)
+    expect(await (await api('/hosts', {}, null)).text()).not.toContain(project.ref)
   })
 
   it('creates, lists, shows (without secrets), reveals secrets and deletes a project', async () => {

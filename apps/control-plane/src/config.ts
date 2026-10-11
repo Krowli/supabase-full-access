@@ -2,7 +2,7 @@ import { resolve } from 'node:path'
 
 import type { CoolifyConfig } from './coolify.ts'
 import { parseSecretsKey } from './secrets.ts'
-import type { StorageTarget } from './template.ts'
+import type { SharedEndpoints } from './template.ts'
 
 export type Config = {
   port: number
@@ -11,10 +11,18 @@ export type Config = {
   secretsKey: Buffer
   apiToken: string
   domainSuffix: string
-  storage: StorageTarget
+  /** Shared services as project stacks reach them (rendered into each project compose). */
+  projectShared: SharedEndpoints
+  /** Shared services as the control plane reaches them (same Coolify service network). */
+  kong: { adminUrl: string; adminToken: string }
+  supavisorUrl: string
+  realtimeUrl: string
+  adminJwtSecret: string
+  minio: { url: string; rootUser: string; rootPassword: string }
   templatePath: string
   healthTimeoutMs: number
   pollIntervalMs: number
+  kongReconcileMs: number
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -32,42 +40,42 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     environment: req('COOLIFY_ENVIRONMENT'),
     serverUuid: req('COOLIFY_SERVER_UUID'),
   }
-  const registryDatabaseUrl = req('REGISTRY_DATABASE_URL')
-  const rawKey = req('PLATFORM_SECRETS_KEY')
-  const apiToken = req('CONTROL_PLANE_TOKEN')
-  const domainSuffix = req('PROJECT_DOMAIN_SUFFIX')
-
-  // The target is the shared MinIO. `file` is for testing until MinIO is shared (M5).
-  const backend = env.PROJECT_STORAGE_BACKEND ?? 's3'
-  let storage: StorageTarget
-  if (backend === 'file') {
-    storage = { backend: 'file' }
-  } else if (backend === 's3') {
-    storage = {
-      backend: 's3',
-      endpoint: req('PROJECT_S3_ENDPOINT'),
-      region: env.PROJECT_S3_REGION ?? 'us-east-1',
-      accessKey: req('PROJECT_S3_ACCESS_KEY'),
-      secretKey: req('PROJECT_S3_SECRET_KEY'),
-    }
-  } else {
-    throw new Error(`PROJECT_STORAGE_BACKEND must be s3 or file, got ${backend}`)
-  }
-
-  if (missing.length) throw new Error(`Missing env: ${missing.join(', ')}`)
-
-  return {
+  const config = {
     port: Number(env.PORT ?? 8080),
     coolify,
-    registryDatabaseUrl,
+    registryDatabaseUrl: req('REGISTRY_DATABASE_URL'),
+    rawKey: req('PLATFORM_SECRETS_KEY'),
+    apiToken: req('CONTROL_PLANE_TOKEN'),
+    domainSuffix: req('PROJECT_DOMAIN_SUFFIX'),
+    projectShared: {
+      s3Endpoint: req('PROJECT_S3_ENDPOINT'),
+      s3Region: env.PROJECT_S3_REGION ?? 'us-east-1',
+      imgproxyUrl: req('PROJECT_IMGPROXY_URL'),
+    },
+    kong: {
+      adminUrl: env.KONG_ADMIN_URL ?? 'http://kong:8001',
+      adminToken: req('KONG_ADMIN_TOKEN'),
+    },
+    supavisorUrl: env.SUPAVISOR_URL ?? 'http://supavisor:4000',
+    realtimeUrl: env.REALTIME_URL ?? 'http://realtime:4000',
+    adminJwtSecret: req('PLATFORM_ADMIN_JWT_SECRET'),
+    minio: {
+      url: env.MINIO_URL ?? 'http://minio:9000',
+      rootUser: req('MINIO_ROOT_USER'),
+      rootPassword: req('MINIO_ROOT_PASSWORD'),
+    },
+  }
+  if (missing.length) throw new Error(`Missing env: ${missing.join(', ')}`)
+
+  const { rawKey, ...rest } = config
+  return {
+    ...rest,
     secretsKey: parseSecretsKey(rawKey),
-    apiToken,
-    domainSuffix,
-    storage,
     templatePath:
       env.PROJECT_TEMPLATE_PATH ??
       resolve(import.meta.dirname, '../../../deploy/platform/project-compose.yaml'),
     healthTimeoutMs: Number(env.PROVISION_TIMEOUT_SECONDS ?? 600) * 1000,
     pollIntervalMs: 5000,
+    kongReconcileMs: 15_000,
   }
 }

@@ -1,6 +1,10 @@
 import type { Coolify, CoolifyService } from '../src/coolify.ts'
+import type { Gateway } from '../src/kong.ts'
+import type { ObjectStorage } from '../src/minio.ts'
+import { routedProjects } from '../src/provisioner.ts'
 import type { Project, ProjectStatus, ProjectUpdate, Registry } from '../src/registry.ts'
 import type { ProjectSecrets } from '../src/secrets.ts'
+import type { TenantRegistry, TenantTarget } from '../src/tenants.ts'
 
 export class MemoryRegistry implements Registry {
   projects = new Map<string, Project>()
@@ -14,6 +18,7 @@ export class MemoryRegistry implements Registry {
       ...p,
       status: 'CREATING',
       coolify_service_uuid: null,
+      step: null,
       created_at: now,
       updated_at: now,
       last_error: null,
@@ -124,5 +129,65 @@ export class FakeCoolify implements Coolify {
     const s = this.services.get(uuid)
     if (!s) throw new Error(`no service ${uuid}`)
     return s
+  }
+}
+
+/** A shared service in memory; `failNext` makes the next call throw once. */
+class FailOnce {
+  failNext = false
+  protected maybeFail(what: string) {
+    if (this.failNext) {
+      this.failNext = false
+      throw new Error(`simulated failure in ${what}`)
+    }
+  }
+}
+
+export class FakeTenants extends FailOnce implements TenantRegistry {
+  tenants = new Map<string, TenantTarget>()
+  async ensure(t: TenantTarget) {
+    this.maybeFail('tenant ensure')
+    this.tenants.set(t.ref, t)
+  }
+  async remove(ref: string) {
+    this.maybeFail('tenant remove')
+    this.tenants.delete(ref)
+  }
+}
+
+export class FakeStorage extends FailOnce implements ObjectStorage {
+  buckets = new Map<string, string>() // ref -> access key
+  async ensureBucket(ref: string, accessKey: string) {
+    this.maybeFail('storage ensure')
+    this.buckets.set(ref, accessKey)
+  }
+  async removeBucket(ref: string) {
+    this.maybeFail('storage remove')
+    this.buckets.delete(ref)
+  }
+}
+
+/** Records which refs each sync would route, read from the registry like the real one. */
+export class FakeGateway extends FailOnce implements Gateway {
+  routed: string[] = []
+  syncs = 0
+  private registry: Registry
+  constructor(registry: Registry) {
+    super()
+    this.registry = registry
+  }
+  async sync() {
+    this.syncs++
+    this.maybeFail('gateway sync')
+    this.routed = routedProjects(await this.registry.list()).map((p) => p.ref)
+  }
+}
+
+export function fakeShared(registry: Registry) {
+  return {
+    storage: new FakeStorage(),
+    pooler: new FakeTenants(),
+    realtime: new FakeTenants(),
+    gateway: new FakeGateway(registry),
   }
 }
