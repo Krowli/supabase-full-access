@@ -1,7 +1,12 @@
 import { components } from 'api-types'
 
 import { readJsonState, writeJsonState } from '../auth-config/state'
-import { adminJwtSecret, projectEnv } from '../project-context'
+import {
+  adminJwtSecret,
+  currentProjectRef,
+  DEFAULT_PROJECT_REF,
+  projectEnv,
+} from '../project-context'
 import { executeQuery } from '../query'
 import { ServiceConfigValidationError, ServiceUnavailableError } from './errors'
 import { adminFetch } from './http'
@@ -36,7 +41,9 @@ type UpdateRealtimeConfigBody = components['schemas']['UpdateRealtimeConfigBody'
  * key and a tenant that already matches is left alone.
  *
  * The admin API read stays as the fallback for a stack where that table cannot be reached — a
- * Realtime on its own database, say. On that path the four columns above come back absent, and
+ * Realtime on its own database, say. With a project registry it is the only read for every project
+ * but `default`: the shared Realtime keeps those tenants in the platform database
+ * (deploy/platform/SPEC.md §8), and the project's own database has no `_realtime` row to read. On that path the four columns above come back absent, and
  * {@link hasDrifted} treats an absent column as drifted, which is what keeps a saved value applied
  * when it cannot be verified. The `PUT` is idempotent — Ecto produces an empty changeset when
  * nothing moved, and neither the cache update nor the client disconnect fires on one — so
@@ -273,6 +280,8 @@ async function readTenantFromDatabase(): Promise<Tenant | undefined> {
  * are written back constantly has nowhere else to look.
  */
 const getLiveTenant = async (): Promise<Tenant> => {
+  if (currentProjectRef() !== DEFAULT_PROJECT_REF) return await getTenant()
+
   const row = await readTenantFromDatabase()
   if (row) return row
 

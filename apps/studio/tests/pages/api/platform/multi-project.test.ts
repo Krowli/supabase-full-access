@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import crypto from 'crypto-js'
@@ -8,11 +8,13 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createMocks, type RequestMethod } from 'node-mocks-http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import authConfigHandler from '../../../../pages/api/platform/auth/[ref]/config'
 import otpHandler from '../../../../pages/api/platform/auth/[ref]/otp'
 import createUserHandler from '../../../../pages/api/platform/auth/[ref]/users/index'
 import queryHandler from '../../../../pages/api/platform/pg-meta/[ref]/query/index'
 import tablesHandler from '../../../../pages/api/platform/pg-meta/[ref]/tables'
 import configHandler from '../../../../pages/api/platform/projects/[ref]/config/index'
+import postgrestConfigHandler from '../../../../pages/api/platform/projects/[ref]/config/postgrest'
 import databasesHandler from '../../../../pages/api/platform/projects/[ref]/databases'
 import projectHandler from '../../../../pages/api/platform/projects/[ref]/index'
 import settingsHandler from '../../../../pages/api/platform/projects/[ref]/settings'
@@ -104,7 +106,7 @@ beforeEach(() => {
     JSON.stringify({
       projects: {
         default: {},
-        proj1: { name: 'Project one', env: { ...PROJ1_ENV } },
+        proj1: { name: 'Project one', env: { ...PROJ1_ENV, PGRST_DB_SCHEMAS: 'public,api' } },
       },
     })
   )
@@ -288,6 +290,15 @@ describe('settings and keys', () => {
     })
   })
 
+  // pg-meta answers no role settings here, so each project's started-with schemas show through.
+  it.each([
+    ['proj1', 'public,api'],
+    ['default', 'public,graphql_public'],
+  ])('reports the %s exposed schemas from that project PGRST_DB_SCHEMAS', async (ref, schemas) => {
+    const res = await call(postgrestConfigHandler, { query: { ref } })
+    expect(res._getJSONData().db_schema).toBe(schemas)
+  })
+
   it('reports the proj1 JWT secret in the PostgREST config', async () => {
     const res = await call(configHandler, { query: { ref: 'proj1' } })
     expect(res._getJSONData().jwt_secret).toBe(PROJ1_ENV.AUTH_JWT_SECRET)
@@ -417,5 +428,63 @@ describe('connection details', () => {
       defaultApiKey: 'default-anon',
       serviceApiKey: 'default-service',
     })
+  })
+})
+
+describe('auth config files', () => {
+  // The registry puts each project's files under `<projectsDir>/<ref>/`; default keeps its own dirs.
+  beforeEach(() => {
+    const registry = join(dir, 'registry.json')
+    writeFileSync(
+      registry,
+      JSON.stringify({
+        projectsDir: join(dir, 'projects'),
+        projects: { default: {}, proj1: { name: 'Project one', env: PROJ1_ENV } },
+      })
+    )
+    vi.stubEnv('STUDIO_PROJECT_REGISTRY', registry)
+    vi.stubEnv('GOTRUE_CONFIG_DIR', join(dir, 'default', 'gotrue'))
+    vi.stubEnv('STUDIO_AUTH_STATE_DIR', join(dir, 'default', 'state'))
+    vi.stubEnv('STUDIO_INTERNAL_URL', 'http://supabase-studio:3000')
+  })
+
+  it('writes a save on proj1 to proj1 files only', async () => {
+    const res = await call(authConfigHandler, {
+      method: 'PATCH',
+      query: { ref: 'proj1' },
+      body: { SMTP_HOST: 'smtp.proj1.test', SITE_URL: 'https://app.proj1.test' },
+    })
+
+    expect(res._getStatusCode()).toBe(200)
+    const envFile = readFileSync(join(dir, 'projects', 'proj1', 'gotrue', '99_studio.env'), 'utf8')
+    expect(envFile).toContain('GOTRUE_SMTP_HOST="smtp.proj1.test"')
+    expect(
+      JSON.parse(readFileSync(join(dir, 'projects', 'proj1', 'state', 'auth-config.json'), 'utf8'))
+    ).toEqual({ SMTP_HOST: 'smtp.proj1.test', SITE_URL: 'https://app.proj1.test' })
+
+    expect(existsSync(join(dir, 'default'))).toBe(false)
+  })
+
+  it('leaves proj1 files alone when default saves', async () => {
+    await call(authConfigHandler, {
+      method: 'PATCH',
+      query: { ref: 'proj1' },
+      body: { SITE_URL: 'https://app.proj1.test' },
+    })
+    const before = readFileSync(join(dir, 'projects', 'proj1', 'gotrue', '99_studio.env'), 'utf8')
+
+    const res = await call(authConfigHandler, {
+      method: 'PATCH',
+      query: { ref: 'default' },
+      body: { SITE_URL: 'https://app.default.test' },
+    })
+
+    expect(res._getStatusCode()).toBe(200)
+    expect(readFileSync(join(dir, 'default', 'gotrue', '99_studio.env'), 'utf8')).toContain(
+      'GOTRUE_SITE_URL="https://app.default.test"'
+    )
+    expect(readFileSync(join(dir, 'projects', 'proj1', 'gotrue', '99_studio.env'), 'utf8')).toBe(
+      before
+    )
   })
 })
