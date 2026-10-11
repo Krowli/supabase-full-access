@@ -82,6 +82,11 @@
         // AUTH_JWT_SECRET (see lib/api/self-hosted/project-context.ts).
         "STUDIO_PROJECT_REGISTRY",
         "PLATFORM_ADMIN_JWT_SECRET",
+        // Or the registry from the control plane: its API, bearer token, and the domain each
+        // project's public gateway sits under (see lib/api/self-hosted/control-plane-registry.ts).
+        "STUDIO_PROJECT_REGISTRY_URL",
+        "STUDIO_PROJECT_REGISTRY_TOKEN",
+        "STUDIO_PROJECT_DOMAIN_SUFFIX",
         // Supavisor's admin API, the tenant it serves, and the port clients pool through. Read by
         // the self-hosted connection-pooling endpoints (see lib/api/self-hosted/service-config).
         "SUPAVISOR_URL",

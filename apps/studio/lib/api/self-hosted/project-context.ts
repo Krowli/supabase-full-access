@@ -5,6 +5,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { z } from 'zod'
 
 import { DEFAULT_AUTH_JWT_SECRET } from './constants'
+import { fetchControlPlaneProjects } from './control-plane-registry'
 
 /**
  * Which project a self-hosted API request is for, and where that project's backends are.
@@ -31,6 +32,11 @@ import { DEFAULT_AUTH_JWT_SECRET } from './constants'
  *   (`DERIVED_ENV`), or are left unset so the reader's own default applies. A project that is
  *   missing its database host must fail, not quietly open `default`'s database.
  * - An unknown ref is a 404, and a reader called outside any request for a project throws.
+ *
+ * Instead of the file, `STUDIO_PROJECT_REGISTRY_URL` (with `STUDIO_PROJECT_REGISTRY_TOKEN` and
+ * `STUDIO_PROJECT_DOMAIN_SUFFIX`) points at the control plane, which `control-plane-registry.ts`
+ * reads into the same entries. That registry is cached for `CONTROL_PLANE_TTL_MS`; while the
+ * control plane fails, the last good one keeps being served and the failure is logged.
  */
 
 export const DEFAULT_PROJECT_REF = 'default'
@@ -38,8 +44,16 @@ export const DEFAULT_PROJECT_REF = 'default'
 /** Re-read the registry at most this often, so a project added to the file shows up without a restart. */
 const REGISTRY_TTL_MS = 30_000
 
+/** Ask the control plane at most this often. Short, so a project it has just created shows up soon. */
+const CONTROL_PLANE_TTL_MS = 10_000
+
+const DEFAULT_PROJECTS_DIR = '/data/pieowl/projects'
+
+/** What the dashboard shows for a project that is running. */
+const ACTIVE_HEALTHY = 'ACTIVE_HEALTHY'
+
 /** The environment names whose value belongs to one project. Every other name Studio reads is shared. */
-const PROJECT_ENV_NAMES = [
+export const PROJECT_ENV_NAMES = [
   'POSTGRES_HOST',
   'POSTGRES_PORT',
   'POSTGRES_DB',
@@ -57,6 +71,7 @@ const PROJECT_ENV_NAMES = [
   'REALTIME_TENANT_ID',
   'STUDIO_AUTH_STATE_DIR',
   'STORAGE_CONFIG_DIR',
+  'PGRST_DB_SCHEMAS',
   'PGRST_DB_EXTRA_SEARCH_PATH',
   'PGRST_DB_MAX_ROWS',
   'UPLOAD_FILE_SIZE_LIMIT',
@@ -116,7 +131,7 @@ const projectSchema = z
 
 const registrySchema = z
   .object({
-    projectsDir: z.string().default('/data/pieowl/projects'),
+    projectsDir: z.string().default(DEFAULT_PROJECTS_DIR),
     projects: z.record(refSchema, projectSchema),
   })
   .strict()
@@ -137,9 +152,14 @@ const registrySchema = z
 export type ResolvedProject = {
   ref: string
   name?: string
+  /** A platform project status. Always `ACTIVE_HEALTHY` for a registry file. */
+  status: string
+  insertedAt?: string
   env: Partial<Record<string, string>>
   projectsDir: string
 }
+
+type Registry = Map<string, ResolvedProject>
 
 /** A request could not be tied to a project. `toJSON` is what lets `apiWrapper`'s `{ error }` carry the message. */
 export class ProjectContextError extends Error {
@@ -161,12 +181,19 @@ export class ProjectNotFoundError extends ProjectContextError {
 }
 
 export function isMultiProject(): boolean {
-  return Boolean(process.env.STUDIO_PROJECT_REGISTRY)
+  return Boolean(process.env.STUDIO_PROJECT_REGISTRY || process.env.STUDIO_PROJECT_REGISTRY_URL)
 }
 
-let cache: { path: string; loadedAt: number; projects: Map<string, ResolvedProject> } | undefined
+const defaultProject = (projectsDir: string): ResolvedProject => ({
+  ref: DEFAULT_PROJECT_REF,
+  status: ACTIVE_HEALTHY,
+  env: {},
+  projectsDir,
+})
 
-function loadRegistry(path: string): Map<string, ResolvedProject> {
+let cache: { path: string; loadedAt: number; projects: Registry } | undefined
+
+function loadRegistryFile(path: string): Registry {
   if (cache?.path === path && Date.now() - cache.loadedAt < REGISTRY_TTL_MS) return cache.projects
 
   let raw: unknown
@@ -192,29 +219,121 @@ function loadRegistry(path: string): Map<string, ResolvedProject> {
   }
 
   const { projectsDir, projects } = parsed.data
-  const resolved = new Map<string, ResolvedProject>([
-    [DEFAULT_PROJECT_REF, { ref: DEFAULT_PROJECT_REF, env: {}, projectsDir }],
-  ])
+  const resolved: Registry = new Map([[DEFAULT_PROJECT_REF, defaultProject(projectsDir)]])
   for (const [ref, project] of Object.entries(projects)) {
-    resolved.set(ref, { ref, name: project.name, env: project.env, projectsDir })
+    resolved.set(ref, {
+      ref,
+      name: project.name,
+      status: ACTIVE_HEALTHY,
+      env: project.env,
+      projectsDir,
+    })
   }
 
   cache = { path, loadedAt: Date.now(), projects: resolved }
   return resolved
 }
 
-function findProject(ref: string): ResolvedProject {
-  const project = loadRegistry(process.env.STUDIO_PROJECT_REGISTRY!).get(ref)
+let controlPlaneCache: { url: string; loadedAt: number; projects: Registry } | undefined
+let controlPlaneLoad: { url: string; promise: Promise<Registry> } | undefined
+
+function requiredEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    throw new ProjectContextError(`${name} must be set with STUDIO_PROJECT_REGISTRY_URL`)
+  }
+  return value
+}
+
+async function fetchControlPlaneRegistry(url: string): Promise<Registry> {
+  const domainSuffix = requiredEnv('STUDIO_PROJECT_DOMAIN_SUFFIX')
+  if (!/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/i.test(domainSuffix)) {
+    throw new ProjectContextError('STUDIO_PROJECT_DOMAIN_SUFFIX is not a domain')
+  }
+  const token = requiredEnv('STUDIO_PROJECT_REGISTRY_TOKEN')
+  const projects = await fetchControlPlaneProjects({ url, token, domainSuffix })
+
+  const resolved: Registry = new Map([[DEFAULT_PROJECT_REF, defaultProject(DEFAULT_PROJECTS_DIR)]])
+  for (const project of projects) {
+    resolved.set(project.ref, { ...project, projectsDir: DEFAULT_PROJECTS_DIR })
+  }
+  return resolved
+}
+
+/**
+ * The control plane's registry, at most `CONTROL_PLANE_TTL_MS` old. Concurrent requests share one
+ * load. A failed load keeps the last good registry for another TTL and logs why; with no good one
+ * yet, it fails the request. It never stands in `default` for a project it cannot see.
+ */
+function loadControlPlaneRegistry(url: string): Promise<Registry> {
+  const cached = controlPlaneCache?.url === url ? controlPlaneCache : undefined
+  if (cached && Date.now() - cached.loadedAt < CONTROL_PLANE_TTL_MS) {
+    return Promise.resolve(cached.projects)
+  }
+  if (controlPlaneLoad?.url === url) return controlPlaneLoad.promise
+
+  const promise = fetchControlPlaneRegistry(url)
+    .then(
+      (projects) => {
+        controlPlaneCache = { url, loadedAt: Date.now(), projects }
+        return projects
+      },
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!cached) {
+          throw error instanceof ProjectContextError ? error : new ProjectContextError(message)
+        }
+        console.error(`[project-registry] ${message}; serving the last good registry`)
+        cached.loadedAt = Date.now()
+        return cached.projects
+      }
+    )
+    .finally(() => {
+      if (controlPlaneLoad?.promise === promise) controlPlaneLoad = undefined
+    })
+  controlPlaneLoad = { url, promise }
+  return promise
+}
+
+function loadRegistry(): Promise<Registry> {
+  const path = process.env.STUDIO_PROJECT_REGISTRY
+  const url = process.env.STUDIO_PROJECT_REGISTRY_URL
+  if (path && url) {
+    return Promise.reject(
+      new ProjectContextError(
+        'Set STUDIO_PROJECT_REGISTRY or STUDIO_PROJECT_REGISTRY_URL, not both'
+      )
+    )
+  }
+  if (url) return loadControlPlaneRegistry(url)
+  try {
+    return Promise.resolve(loadRegistryFile(path!))
+  } catch (error) {
+    return Promise.reject(error)
+  }
+}
+
+async function findProject(ref: string): Promise<ResolvedProject> {
+  const project = (await loadRegistry()).get(ref)
   if (!project) throw new ProjectNotFoundError(ref)
   return project
 }
 
+/**
+ * Every project Studio serves, `default` first and the rest in registry order. Without a registry
+ * that is `default` alone.
+ */
+export async function listProjects(): Promise<ResolvedProject[]> {
+  if (!isMultiProject()) return [defaultProject(DEFAULT_PROJECTS_DIR)]
+  return [...(await loadRegistry()).values()]
+}
+
 const storage = new AsyncLocalStorage<ResolvedProject>()
 
-/** Runs `fn` as project `ref`. Throws `ProjectNotFoundError` for a ref the registry does not hold. */
-export function runWithProject<T>(ref: string, fn: () => T): T {
+/** Runs `fn` as project `ref`. Rejects with `ProjectNotFoundError` for a ref the registry does not hold. */
+export async function runWithProject<T>(ref: string, fn: () => T | Promise<T>): Promise<T> {
   if (!isMultiProject()) return fn()
-  return storage.run(findProject(ref), fn)
+  return storage.run(await findProject(ref), fn)
 }
 
 /** The route's `[ref]`, else the `projectRef` the AI routes carry in their body. */
@@ -242,7 +361,7 @@ export async function withProjectContext<T>(
 
   let project: ResolvedProject
   try {
-    project = findProject(ref)
+    project = await findProject(ref)
   } catch (error) {
     if (!(error instanceof ProjectNotFoundError)) throw error
     return res.status(404).json({ error: { message: error.message } })
@@ -270,13 +389,39 @@ export function currentProjectName(): string | undefined {
   return isMultiProject() ? currentProject().name : undefined
 }
 
-/** The value of a per-project environment name for this request's project. */
+/** The status the registry gives this request's project. Always running when Studio is single-project. */
+export function currentProjectStatus(): string {
+  return isMultiProject() ? currentProject().status : ACTIVE_HEALTHY
+}
+
+/** When the registry says this request's project was created, if it says. */
+export function currentProjectInsertedAt(): string | undefined {
+  return isMultiProject() ? currentProject().insertedAt : undefined
+}
+
+const isRequiredEnv = (name: string): name is (typeof REQUIRED_ENV)[number] =>
+  (REQUIRED_ENV as readonly string[]).includes(name)
+
+/**
+ * The value of a per-project environment name for this request's project.
+ *
+ * A project other than `default` that lacks one of `REQUIRED_ENV` throws: the control plane lists a
+ * project before its stack exists, and each reader's own default for these names is `default`'s
+ * backend. A registry file cannot get here, because it is validated when it is read.
+ */
 export function projectEnv(name: ProjectEnvName): string | undefined {
   if (!isMultiProject()) return process.env[name]
 
   const project = currentProject()
   if (project.ref === DEFAULT_PROJECT_REF) return project.env[name] ?? process.env[name]
-  return project.env[name] ?? DERIVED_ENV[name]?.(project.ref, project.projectsDir)
+
+  const value = project.env[name] ?? DERIVED_ENV[name]?.(project.ref, project.projectsDir)
+  if (value === undefined && isRequiredEnv(name)) {
+    throw new ProjectContextError(
+      `Project ${project.ref} is not ready (${project.status}): it has no ${name} yet`
+    )
+  }
+  return value
 }
 
 /** This project's Postgres, with the defaults `constants.ts` applies to the container environment. */
