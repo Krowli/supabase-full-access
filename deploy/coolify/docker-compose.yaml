@@ -27,6 +27,9 @@ services:
       - KONG_DNS_NOT_FOUND_TTL=1
       - 'KONG_PLUGINS=request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction,post-function'
       - KONG_NGINX_PROXY_PROXY_BUFFER_SIZE=160k
+      # PostgREST filters like .in('col', [200 hashes]) build ~13 KB URLs; nginx's default
+      # 8 KB header buffer answers 414. Measured on the tax app load test, 2026-10-12.
+      - 'KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS=4 32k'
       - 'KONG_NGINX_PROXY_PROXY_BUFFERS=64 160k'
       - 'KONG_PROXY_ACCESS_LOG=/dev/stdout combined'
       - 'SUPABASE_ANON_KEY=${SERVICE_SUPABASEANON_KEY}'
