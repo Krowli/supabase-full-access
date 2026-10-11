@@ -4,6 +4,7 @@ import { getPgMetaRedirectUrl } from './tables'
 import { fetchGet } from '@/data/fetchers'
 import { constructHeaders } from '@/lib/api/apiHelpers'
 import { apiWrapper } from '@/lib/api/apiWrapper'
+import { withProjectConnection } from '@/lib/api/self-hosted/multi-project'
 
 export default (req: NextApiRequest, res: NextApiResponse) =>
   apiWrapper(req, res, handler, { withAuth: true })
@@ -20,7 +21,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 const handleGetAll = async (req: NextApiRequest, res: NextApiResponse) => {
-  const headers = constructHeaders(req.headers)
+  const headers = constructHeaders(withProjectConnection(req.headers)) // Fork: per-project database
   const response = await fetchGet(getPgMetaRedirectUrl(req, 'column-privileges'), { headers })
 
   if (response.error) {

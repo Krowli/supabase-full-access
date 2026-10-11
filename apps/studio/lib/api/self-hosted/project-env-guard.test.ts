@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { PROJECT_ENV_NAMES } from './project-context'
+
 /**
  * Guard for the multi-project resolver (deploy/platform/SPEC.md §6, risk 4).
  *
@@ -17,12 +19,16 @@ const STUDIO = resolve(__dirname, '../../..')
 const SCANNED = ['lib/api', 'pages/api']
 const RESOLVER = 'lib/api/self-hosted/project-context.ts'
 
-const PROJECT_ENV_READ = /process\.env(?:\.|\[\s*['"])((?:SUPABASE_|POSTGRES_|AUTH_JWT)[A-Z0-9_]*)/g
+/** A direct read of any name the resolver answers per project, plus the SPEC's `SUPABASE_`/`POSTGRES_` families. */
+const PROJECT_ENV_READ = new RegExp(
+  `process\\.env(?:\\.|\\[\\s*['"])((?:SUPABASE_|POSTGRES_|AUTH_JWT|GOTRUE_)[A-Z0-9_]*|${PROJECT_ENV_NAMES.join('|')})\\b`,
+  'g'
+)
 
 /** Constants computed once, at import, from the single project's environment. */
 const SNAPSHOT_MODULES: Record<string, RegExp> = {
   'lib/api/self-hosted/constants.ts':
-    /^(POSTGRES_(HOST|PORT|DATABASE|PASSWORD|USER_READ_WRITE|USER_READ_ONLY)|AUTH_JWT_SECRET)$/,
+    /^(POSTGRES_(HOST|PORT|DATABASE|PASSWORD|USER_READ_WRITE|USER_READ_ONLY)|AUTH_JWT_SECRET|DEFAULT_EXPOSED_SCHEMAS)$/,
   'lib/constants/api.ts': /^PROJECT_(REST_URL|ENDPOINT|ENDPOINT_PROTOCOL|DB_HOST)$/,
 }
 
@@ -31,7 +37,12 @@ const SNAPSHOT_MODULES: Record<string, RegExp> = {
  * branch: the test fails if a merge drops it.
  */
 const GATED = [
+  'pages/api/mcp/index.ts',
+  'pages/api/platform/profile/index.ts',
+  'pages/api/platform/projects/index.ts',
+  'pages/api/platform/projects/[ref]/databases.ts',
   'pages/api/platform/projects/[ref]/index.ts',
+  'pages/api/platform/props/project/[ref]/api.ts',
   'lib/api/self-hosted-admin.ts',
   'lib/api/self-hosted/service-config/postgrest.ts',
   'lib/api/self-hosted/settings.ts',
@@ -43,6 +54,7 @@ const KNOWN_READS: Record<string, string[]> = {
   // The single project's snapshot. Only the gated files below import from it.
   'lib/api/self-hosted/constants.ts': [
     'AUTH_JWT_SECRET',
+    'PGRST_DB_SCHEMAS',
     'POSTGRES_DB',
     'POSTGRES_HOST',
     'POSTGRES_PASSWORD',
@@ -52,19 +64,20 @@ const KNOWN_READS: Record<string, string[]> = {
   ],
   'lib/api/self-hosted-admin.ts': ['SUPABASE_SERVICE_KEY', 'SUPABASE_URL'],
   'lib/api/self-hosted/settings.ts': ['SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_KEY'],
-  // M2: an `apiKey` header upstream itself thinks is unused, sent only to pg-meta and GoTrue.
-  'lib/api/apiHelpers.ts': ['SUPABASE_SERVICE_KEY'],
-  // M2: the MCP route takes no ref; self-hosted it always serves `default`.
+  // The MCP route takes no ref and serves `default`; `pages/api/mcp` refuses to run with a registry.
   'lib/api/self-hosted/mcp.ts': ['SUPABASE_PUBLISHABLE_KEY', 'SUPABASE_PUBLISHABLE_KEY'],
-  // M2: the legacy project props route, read with the other display constants below.
-  'pages/api/platform/props/project/[ref]/api.ts': ['SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_KEY'],
+  // Later: the CLI's S3 keys, read at import; nothing in the dashboard calls this route.
+  'pages/api/get-s3-keys.ts': ['S3_PROTOCOL_ACCESS_KEY_ID', 'S3_PROTOCOL_ACCESS_KEY_SECRET'],
   // Out of scope: one edge runtime serves `default` only (SPEC.md §5).
   'pages/api/edge-functions/test.ts': ['SUPABASE_PUBLIC_URL', 'SUPABASE_URL'],
 }
 
 /** Imports of the snapshot constants that remain, by file. */
 const KNOWN_SNAPSHOT_IMPORTS: Record<string, string[]> = {
-  'lib/api/self-hosted/service-config/postgrest.ts': ['POSTGRES_DATABASE'],
+  'lib/api/self-hosted/service-config/postgrest.ts': [
+    'DEFAULT_EXPOSED_SCHEMAS',
+    'POSTGRES_DATABASE',
+  ],
   'lib/api/self-hosted/settings.ts': [
     'AUTH_JWT_SECRET',
     'POSTGRES_PORT',
@@ -81,7 +94,7 @@ const KNOWN_SNAPSHOT_IMPORTS: Record<string, string[]> = {
     'POSTGRES_USER_READ_WRITE',
   ],
   'pages/api/platform/projects/[ref]/index.ts': ['PROJECT_REST_URL'],
-  // M2: the databases and props routes report `default`'s URLs and port.
+  // The single-project answers of the databases and props routes; both are gated below.
   'pages/api/platform/projects/[ref]/databases.ts': [
     'POSTGRES_PORT',
     'PROJECT_DB_HOST',
@@ -159,5 +172,20 @@ describe('project env guard', () => {
 
   it.each(GATED)('%s keeps its multi-project branch', (file) => {
     expect(read(file)).toMatch(/if \(isMultiProject\(\)\)|isMultiProject\(\) \?/)
+  })
+
+  // Without the header pg-meta opens its own default database, which is `default`'s. (The `query`
+  // route goes through `executeQuery`, which always sends one.)
+  it('sends the project connection from every pg-meta GET route', () => {
+    const proxies = files.filter(
+      (file) =>
+        file.startsWith('pages/api/platform/pg-meta/[ref]/') && read(file).includes('fetchGet(')
+    )
+    const unwrapped = proxies.filter(
+      (file) => !read(file).includes('constructHeaders(withProjectConnection(req.headers))')
+    )
+
+    expect(proxies).toHaveLength(10)
+    expect(unwrapped).toEqual([])
   })
 })
