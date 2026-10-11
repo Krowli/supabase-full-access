@@ -60,6 +60,8 @@ CMD ["pnpm", "dev:studio"]
 
 # Compile Next.js
 FROM dev AS build-next
+# Fork: `true` builds the multi-project switcher in (deploy/platform/SPEC.md). Empty means off.
+ARG NEXT_PUBLIC_IS_MULTI_PROJECT
 RUN pnpm --filter studio exec next build
 
 # Assemble the runtime tree at /srv in the layout the production stage
