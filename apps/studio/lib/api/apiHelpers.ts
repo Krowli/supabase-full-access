@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from 'node:http'
 import { snakeCase } from 'lodash'
 import z from 'zod'
 
+import { projectEnv } from './self-hosted/project-context'
 import { IS_PLATFORM } from '@/lib/constants'
 
 /**
@@ -28,7 +29,7 @@ export function constructHeaders(headers: { [prop: string]: any }) {
       ...cleansedHeaders,
       // [Joshen] JFYI both Alaister and I checked on this and realised this might not be used actually
       // Could be safe to remove but leaving it here for now
-      ...(!IS_PLATFORM && { apiKey: `${process.env.SUPABASE_SERVICE_KEY}` }),
+      ...(!IS_PLATFORM && { apiKey: `${projectEnv('SUPABASE_SERVICE_KEY')}` }),
     }
   } else {
     return {

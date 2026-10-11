@@ -11,9 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import otpHandler from '../../../../pages/api/platform/auth/[ref]/otp'
 import createUserHandler from '../../../../pages/api/platform/auth/[ref]/users/index'
 import queryHandler from '../../../../pages/api/platform/pg-meta/[ref]/query/index'
+import tablesHandler from '../../../../pages/api/platform/pg-meta/[ref]/tables'
 import configHandler from '../../../../pages/api/platform/projects/[ref]/config/index'
+import databasesHandler from '../../../../pages/api/platform/projects/[ref]/databases'
 import projectHandler from '../../../../pages/api/platform/projects/[ref]/index'
 import settingsHandler from '../../../../pages/api/platform/projects/[ref]/settings'
+import propsApiHandler from '../../../../pages/api/platform/props/project/[ref]/api'
 import signHandler from '../../../../pages/api/platform/storage/[ref]/buckets/[id]/objects/sign'
 import bucketsHandler from '../../../../pages/api/platform/storage/[ref]/buckets/index'
 import apiKeysHandler from '../../../../pages/api/v1/projects/[ref]/api-keys'
@@ -98,12 +101,21 @@ beforeEach(() => {
   const registry = join(dir, 'registry.json')
   writeFileSync(
     registry,
-    JSON.stringify({ projects: { default: {}, proj1: { name: 'Project one', env: PROJ1_ENV } } })
+    JSON.stringify({
+      projects: {
+        default: {},
+        proj1: { name: 'Project one', env: { ...PROJ1_ENV } },
+      },
+    })
   )
   vi.stubEnv('STUDIO_PROJECT_REGISTRY', registry)
 
   mswServer.use(
     http.post('http://pg-meta.test/query', ({ request }) => {
+      record(request)
+      return HttpResponse.json([])
+    }),
+    http.get('http://pg-meta.test/tables', ({ request }) => {
       record(request)
       return HttpResponse.json([])
     }),
@@ -201,6 +213,8 @@ describe('GoTrue admin', () => {
     expect(res._getStatusCode()).toBe(200)
     expect(seen[0].url).toBe('http://proj1.kong.test:8000/auth/v1/otp')
     expect(seen[0].headers.get('authorization')).toBe('Bearer proj1-service')
+    // Kong's key-auth reads `apikey` before `Authorization`, and refuses another project's key.
+    expect(seen[0].headers.get('apikey')).toBe('proj1-service')
   })
 })
 
@@ -323,5 +337,85 @@ describe('shared admin APIs', () => {
     expect(verifies(token, PROJ1_ENV.AUTH_JWT_SECRET)).toBe(false)
     expect(config.db_user).toBe('postgres.proj1')
     expect(config.connection_string).toContain('@proj1.example.test:')
+  })
+})
+
+describe('pg-meta GET routes', () => {
+  it.each([
+    ['proj1', 'postgresql://supabase_admin:proj1-db-password@supabase-db-uuid1:5432/postgres'],
+    ['default', 'postgresql://supabase_admin:default-db-password@db:5432/postgres'],
+  ])('send the %s database to pg-meta', async (ref, connection) => {
+    const res = await call(tablesHandler, { query: { ref, include_columns: 'false' } })
+
+    expect(res._getStatusCode()).toBe(200)
+    expect(new URL(seen[0].url).pathname).toBe('/tables')
+    expect(decryptConnection(seen[0])).toBe(connection)
+  })
+
+  it('leave the connection to pg-meta when no registry is configured', async () => {
+    vi.stubEnv('STUDIO_PROJECT_REGISTRY', undefined)
+
+    await call(tablesHandler, { query: { ref: 'default' } })
+
+    expect(seen[0].headers.get('x-connection-encrypted')).toBeNull()
+  })
+})
+
+describe('connection details', () => {
+  it('reports the proj1 database for the Connect strings', async () => {
+    const res = await call(databasesHandler, { query: { ref: 'proj1' } })
+
+    expect(res._getJSONData()).toEqual([
+      expect.objectContaining({
+        identifier: 'proj1',
+        db_host: 'proj1.example.test',
+        db_port: 5432,
+        restUrl: 'https://proj1.example.test/rest/v1/',
+      }),
+    ])
+  })
+
+  it('reports the default database unchanged', async () => {
+    const res = await call(databasesHandler, { query: { ref: 'default' } })
+
+    expect(res._getJSONData()).toEqual([
+      expect.objectContaining({
+        identifier: 'default',
+        db_host: 'default.example.test',
+        restUrl: 'https://default.example.test/rest/v1/',
+      }),
+    ])
+  })
+
+  it('reports the proj1 legacy API props', async () => {
+    const res = await call(propsApiHandler, { query: { ref: 'proj1' } })
+    const { project, autoApiService } = res._getJSONData()
+
+    expect(project).toMatchObject({
+      ref: 'proj1',
+      name: 'Project one',
+      db_host: 'proj1.example.test',
+      services: [{ app_config: { endpoint: 'proj1.example.test' } }],
+    })
+    expect(autoApiService).toMatchObject({
+      project: { ref: 'proj1' },
+      app_config: { endpoint: 'proj1.example.test' },
+      protocol: 'https',
+      endpoint: 'proj1.example.test',
+      restUrl: 'https://proj1.example.test/rest/v1/',
+      defaultApiKey: 'proj1-anon',
+      serviceApiKey: 'proj1-service',
+    })
+  })
+
+  it('reports the default legacy API props unchanged', async () => {
+    const res = await call(propsApiHandler, { query: { ref: 'default' } })
+
+    expect(res._getJSONData().autoApiService).toMatchObject({
+      project: { ref: 'default' },
+      endpoint: 'default.example.test',
+      defaultApiKey: 'default-anon',
+      serviceApiKey: 'default-service',
+    })
   })
 })

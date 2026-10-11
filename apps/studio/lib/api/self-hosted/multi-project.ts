@@ -1,11 +1,14 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import crypto from 'crypto-js'
 
+import { ENCRYPTION_KEY } from './constants'
 import {
   currentProjectInsertedAt,
   currentProjectName,
   currentProjectRef,
   currentProjectStatus,
   DEFAULT_PROJECT_REF,
+  isMultiProject,
   projectEnv,
   projectJwtSecret,
   projectPostgres,
@@ -46,6 +49,20 @@ export function projectAdminClient(): SupabaseClient {
 const projectName = (ref: string, singleProjectName: string) =>
   currentProjectName() ?? (ref === DEFAULT_PROJECT_REF ? singleProjectName : ref)
 
+/**
+ * The URLs and host a project route reports, from this project's `SUPABASE_PUBLIC_URL`, parsed the
+ * way `lib/constants/api.ts` parses it for the single project.
+ */
+function publicEndpoint() {
+  const url = new URL(projectEnv('SUPABASE_PUBLIC_URL') || 'http://localhost:8000')
+  return {
+    restUrl: `${url.origin}/rest/v1/`,
+    endpoint: url.host,
+    protocol: url.protocol.replace(':', ''),
+    dbHost: url.hostname,
+  }
+}
+
 /** The fields of `settings.ts`'s response that name the project. */
 type ProjectSettingsFields = {
   app_config: { endpoint: string; storage_endpoint: string; protocol?: string }
@@ -63,13 +80,13 @@ type ProjectSettingsFields = {
  * `SUPABASE_PUBLIC_URL` for the single project.
  */
 export function applyProjectSettings(settings: ProjectSettingsFields): void {
-  const publicUrl = new URL(projectEnv('SUPABASE_PUBLIC_URL') || 'http://localhost:8000')
+  const { endpoint, protocol, dbHost } = publicEndpoint()
   const ref = currentProjectRef()
 
-  settings.app_config.endpoint = publicUrl.host
-  settings.app_config.storage_endpoint = publicUrl.host
-  settings.app_config.protocol = publicUrl.protocol.replace(':', '')
-  settings.db_host = publicUrl.hostname
+  settings.app_config.endpoint = endpoint
+  settings.app_config.storage_endpoint = endpoint
+  settings.app_config.protocol = protocol
+  settings.db_host = dbHost
   settings.db_port = projectPostgres().port
   settings.jwt_secret = projectJwtSecret()
   settings.name = projectName(ref, settings.name)
@@ -92,7 +109,6 @@ export function applyProjectDetail(detail: {
   inserted_at: string
   restUrl: string
 }): void {
-  const publicUrl = new URL(projectEnv('SUPABASE_PUBLIC_URL') || 'http://localhost:8000')
   const ref = currentProjectRef()
 
   detail.ref = ref
@@ -100,5 +116,72 @@ export function applyProjectDetail(detail: {
   // The building screen shows while this is `COMING_UP` and polls `/status` until it is running.
   detail.status = currentProjectStatus()
   detail.inserted_at = currentProjectInsertedAt() ?? detail.inserted_at
-  detail.restUrl = `${publicUrl.origin}/rest/v1/`
+  detail.restUrl = publicEndpoint().restUrl
+}
+
+/**
+ * Rewrites `pages/api/platform/projects/[ref]/databases.ts`'s one database for this request's
+ * project. The Connect sheet picks the primary database as the one whose `identifier` is the ref.
+ */
+export function applyProjectDatabase(database: {
+  identifier: string
+  db_host: string
+  db_port: number
+  restUrl: string
+}): void {
+  const { restUrl, dbHost } = publicEndpoint()
+
+  database.identifier = currentProjectRef()
+  database.db_host = dbHost
+  database.db_port = projectPostgres().port
+  database.restUrl = restUrl
+}
+
+type ProjectPropsService = { app_config: { endpoint: string } }
+
+/** Rewrites `pages/api/platform/props/project/[ref]/api.ts`'s legacy props for this request's project. */
+export function applyProjectProps(props: {
+  project: {
+    ref: string
+    name: string
+    db_host: string
+    db_port: number
+    services: ProjectPropsService[]
+  }
+  autoApiService: ProjectPropsService & {
+    project: { ref: string }
+    protocol: string
+    endpoint: string
+    restUrl: string
+  }
+}): void {
+  const { restUrl, endpoint, protocol, dbHost } = publicEndpoint()
+  const ref = currentProjectRef()
+  const { project, autoApiService } = props
+
+  project.ref = ref
+  project.name = projectName(ref, project.name)
+  project.db_host = dbHost
+  project.db_port = projectPostgres().port
+  for (const service of project.services) service.app_config.endpoint = endpoint
+
+  autoApiService.project.ref = ref
+  autoApiService.app_config.endpoint = endpoint
+  autoApiService.protocol = protocol
+  autoApiService.endpoint = endpoint
+  autoApiService.restUrl = restUrl
+}
+
+/**
+ * The headers a `pg-meta/[ref]` GET route forwards, plus this project's encrypted connection string.
+ * Without one, pg-meta answers from its own `PG_META_DB_*` database, which is `default`'s. Single
+ * project, the headers pass through untouched, as before.
+ */
+export function withProjectConnection<T extends object>(headers: T): T {
+  if (!isMultiProject()) return headers
+  const connection = projectConnectionString({ readOnly: false })
+  return {
+    ...headers,
+    'x-connection-encrypted': crypto.AES.encrypt(connection, ENCRYPTION_KEY).toString(),
+  }
 }

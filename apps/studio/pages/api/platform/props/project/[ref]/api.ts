@@ -2,6 +2,8 @@ import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
 import { POSTGRES_PORT } from '@/lib/api/self-hosted/constants'
+import { applyProjectProps } from '@/lib/api/self-hosted/multi-project'
+import { isMultiProject, projectEnv } from '@/lib/api/self-hosted/project-context'
 import {
   DEFAULT_PROJECT,
   PROJECT_DB_HOST,
@@ -73,8 +75,8 @@ const handleGetAll = async (_req: NextApiRequest, res: NextApiResponse) => {
       protocol: PROJECT_ENDPOINT_PROTOCOL,
       endpoint: PROJECT_ENDPOINT,
       restUrl: PROJECT_REST_URL,
-      defaultApiKey: process.env.SUPABASE_ANON_KEY,
-      serviceApiKey: process.env.SUPABASE_SERVICE_KEY,
+      defaultApiKey: projectEnv('SUPABASE_ANON_KEY'),
+      serviceApiKey: projectEnv('SUPABASE_SERVICE_KEY'),
       service_api_keys: [
         {
           api_key_encrypted: '-',
@@ -89,6 +91,7 @@ const handleGetAll = async (_req: NextApiRequest, res: NextApiResponse) => {
       ],
     },
   }
+  if (isMultiProject()) applyProjectProps(response) // Fork: per-project props
 
   return res.status(200).json(response)
 }

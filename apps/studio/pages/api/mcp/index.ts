@@ -14,6 +14,7 @@ import {
   getDebuggingOperations,
   getDevelopmentOperations,
 } from '@/lib/api/self-hosted/mcp'
+import { isMultiProject, MULTI_PROJECT_MCP_ERROR } from '@/lib/api/self-hosted/project-context'
 import { DEFAULT_PROJECT } from '@/lib/constants/api'
 
 const supportedFeatureGroupSchema = z.enum(['docs', 'database', 'development', 'debugging'])
@@ -49,6 +50,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
 }
 
 async function handlePost(req: NextApiRequest, res: NextApiResponse) {
+  if (isMultiProject()) return res.status(501).json({ error: { message: MULTI_PROJECT_MCP_ERROR } }) // Fork
   const { error, data } = mcpQuerySchema.safeParse(req.query)
 
   if (error) {

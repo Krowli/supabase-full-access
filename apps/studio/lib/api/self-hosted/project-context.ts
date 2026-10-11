@@ -180,6 +180,13 @@ export class ProjectNotFoundError extends ProjectContextError {
   }
 }
 
+/**
+ * Why `pages/api/mcp` refuses to run with a registry. Its URL names no project, and its tools read
+ * `default`'s keys and settings; a client pointed at it could not know which project it is changing.
+ */
+export const MULTI_PROJECT_MCP_ERROR =
+  'The MCP server is not available when Studio serves several projects: it cannot tell which project a client means'
+
 export function isMultiProject(): boolean {
   return Boolean(process.env.STUDIO_PROJECT_REGISTRY || process.env.STUDIO_PROJECT_REGISTRY_URL)
 }

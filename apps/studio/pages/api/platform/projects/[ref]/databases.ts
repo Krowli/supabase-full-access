@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
 import { POSTGRES_PORT } from '@/lib/api/self-hosted/constants'
+import { applyProjectDatabase } from '@/lib/api/self-hosted/multi-project'
+import { isMultiProject } from '@/lib/api/self-hosted/project-context'
 import { PROJECT_DB_HOST, PROJECT_REST_URL } from '@/lib/constants/api'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
@@ -23,7 +25,7 @@ type ResponseData =
   paths['/platform/projects/{ref}/databases']['get']['responses']['200']['content']['application/json']
 
 const handleGet = async (_req: NextApiRequest, res: NextApiResponse<ResponseData>) => {
-  return res.status(200).json([
+  const response: ResponseData = [
     {
       cloud_provider: 'localhost' as any,
       connectionString: '',
@@ -39,5 +41,7 @@ const handleGet = async (_req: NextApiRequest, res: NextApiResponse<ResponseData
       size: '',
       status: 'ACTIVE_HEALTHY',
     },
-  ])
+  ]
+  if (isMultiProject()) applyProjectDatabase(response[0]) // Fork: per-project Connect strings
+  return res.status(200).json(response)
 }
