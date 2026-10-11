@@ -2,8 +2,8 @@
 # apps/control-plane renders this file per project and creates it as a Coolify service.
 #
 # Two kinds of variables:
-# - {{...}} placeholders are replaced by the control plane before upload (ref, URL, storage).
-#   Values are plain, non-secret strings.
+# - {{...}} placeholders are replaced by the control plane before upload (ref, URL, and the
+#   shared MinIO and imgproxy addresses). Values are plain, non-secret strings.
 # - ${...} references are Coolify service env vars. The control plane sets the secrets this
 #   way, so they never appear in the compose text Coolify stores: PROJECT_DB_PASSWORD,
 #   PROJECT_JWT_SECRET, PROJECT_ANON_KEY, PROJECT_SERVICE_KEY, S3_ACCESS_KEY, S3_SECRET_KEY.
@@ -374,11 +374,9 @@ services:
       - 'AUTH_JWT_SECRET=${PROJECT_JWT_SECRET}'
       - 'DATABASE_URL=postgres://supabase_storage_admin:${PROJECT_DB_PASSWORD}@supabase-db:5432/postgres'
       - DB_INSTALL_ROLES=false
-      # The target is the shared MinIO (s3): one bucket per project, named after the ref.
-      # `file` keeps objects in the storage-data volume; it exists for testing before MinIO is
-      # shared (M5).
-      - 'STORAGE_BACKEND={{STORAGE_BACKEND}}'
-      - FILE_STORAGE_BACKEND_PATH=/var/lib/storage
+      # The shared MinIO: one bucket per project, named after the ref, and an access key that
+      # only reaches that bucket (the control plane creates both before the first start).
+      - STORAGE_BACKEND=s3
       - 'STORAGE_S3_BUCKET={{S3_BUCKET}}'
       - 'STORAGE_S3_ENDPOINT={{S3_ENDPOINT}}'
       - STORAGE_S3_FORCE_PATH_STYLE=true
@@ -390,8 +388,9 @@ services:
       - UPLOAD_SIGNED_URL_EXPIRATION_TIME=120
       - TUS_URL_PATH=/upload/resumable
       - TUS_MAX_SIZE=3600000
-      # The shared imgproxy is wired in M5; until then transformations are off.
-      - ENABLE_IMAGE_TRANSFORMATION=false
+      - ENABLE_IMAGE_TRANSFORMATION=true
+      - 'IMGPROXY_URL={{IMGPROXY_URL}}'
+      - IMGPROXY_REQUEST_TIMEOUT=15
       - DATABASE_SEARCH_PATH=storage
       - NODE_ENV=production
       - REQUEST_ALLOW_X_FORWARDED_PATH=true
@@ -401,12 +400,10 @@ services:
       - 'PGRST_JWT_SECRET=${PROJECT_JWT_SECRET}'
       - 'STORAGE_PUBLIC_URL={{PUBLIC_URL}}'
     volumes:
-      - 'storage-data:/var/lib/storage'
       # M3 replaces this volume with the bind /data/pieowl/projects/<ref>/storage that Studio writes.
       - 'storage-config:/etc/studio-config:ro'
 volumes:
   supabase-db-data:
   supabase-db-config:
   gotrue-config:
-  storage-data:
   storage-config:

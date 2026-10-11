@@ -2,7 +2,7 @@ import pg from 'pg'
 
 import { decrypt, encrypt, SECRET_COLUMNS, type ProjectSecrets } from './secrets.ts'
 
-export const STATUSES = ['CREATING', 'COMING_UP', 'ACTIVE_HEALTHY', 'FAILED'] as const
+export const STATUSES = ['CREATING', 'COMING_UP', 'ACTIVE_HEALTHY', 'FAILED', 'DELETING'] as const
 export type ProjectStatus = (typeof STATUSES)[number]
 
 export type Project = {
@@ -10,12 +10,16 @@ export type Project = {
   name: string
   status: ProjectStatus
   coolify_service_uuid: string | null
+  /** The provisioning or delete step that ran last; with FAILED, the one that failed. */
+  step: string | null
   created_at: Date
   updated_at: Date
   last_error: string | null
 }
 
-export type ProjectUpdate = Partial<Pick<Project, 'status' | 'coolify_service_uuid' | 'last_error'>>
+export type ProjectUpdate = Partial<
+  Pick<Project, 'status' | 'coolify_service_uuid' | 'step' | 'last_error'>
+>
 
 export interface Registry {
   insert(project: { ref: string; name: string }, secrets: ProjectSecrets): Promise<Project>
@@ -36,6 +40,7 @@ create table if not exists _platform.projects (
   name text not null,
   status text not null check (status in (${STATUSES.map((s) => `'${s}'`).join(', ')})),
   coolify_service_uuid text,
+  step text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   last_error text
@@ -47,12 +52,14 @@ create table if not exists _platform.project_secrets (
   db_password text not null,
   jwt_secret text not null,
   anon_key text not null,
-  service_key text not null
+  service_key text not null,
+  s3_access_key text not null,
+  s3_secret_key text not null
 );
 `
 
 const PROJECT_COLUMNS =
-  'ref, name, status, coolify_service_uuid, created_at, updated_at, last_error'
+  'ref, name, status, coolify_service_uuid, step, created_at, updated_at, last_error'
 
 /** Idempotent; an advisory lock keeps two starting instances from racing. */
 export async function migrate(pool: pg.Pool): Promise<void> {
@@ -81,7 +88,7 @@ export function createPgRegistry(pool: pg.Pool, key: Buffer): Registry {
           [project.ref, project.name]
         )
         await client.query(
-          `insert into _platform.project_secrets (ref, ${SECRET_COLUMNS.join(', ')}) values ($1, $2, $3, $4, $5)`,
+          `insert into _platform.project_secrets (ref, ${SECRET_COLUMNS.join(', ')}) values ($1, ${SECRET_COLUMNS.map((_, i) => `$${i + 2}`).join(', ')})`,
           [
             project.ref,
             ...SECRET_COLUMNS.map((c) => encrypt(secrets[c], key, `${project.ref}:${c}`)),

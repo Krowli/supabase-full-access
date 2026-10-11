@@ -77,6 +77,13 @@ describe('generateProjectSecrets', () => {
     const b = generateProjectSecrets('aaaaaaaaaaaaaaaaaaaa')
     expect(a.db_password).not.toBe(b.db_password)
     expect(a.jwt_secret).not.toBe(b.jwt_secret)
+    expect(a.s3_access_key).not.toBe(b.s3_access_key)
+  })
+
+  it('makes MinIO keys within MinIO limits (access key 20, secret key 40)', () => {
+    const s = generateProjectSecrets('aaaaaaaaaaaaaaaaaaaa')
+    expect(s.s3_access_key).toMatch(/^[A-Z0-9]{20}$/)
+    expect(s.s3_secret_key).toMatch(/^[A-Za-z0-9]{40}$/)
   })
 })
 

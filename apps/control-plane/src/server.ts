@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
-import { ConflictError, NotFoundError, type Provisioner } from './provisioner.ts'
+import { ConflictError, NotFoundError, routedProjects, type Provisioner } from './provisioner.ts'
 import type { Project, Registry } from './registry.ts'
 
 export type ServerDeps = {
@@ -26,6 +26,7 @@ export function projectView(p: Project, domainSuffix: string) {
     ref: p.ref,
     name: p.name,
     status: p.status,
+    step: p.step,
     coolify_service_uuid: u,
     endpoint: `https://${p.ref}.${domainSuffix}`,
     internal: u
@@ -86,6 +87,12 @@ export function createApp(deps: ServerDeps): Server {
     if (method === 'GET' && path === '/health') {
       await registry.ping()
       return send(res, 200, { ok: true })
+    }
+    // Public hostnames only (no secrets): the gateway host polls this to request certificates.
+    if (method === 'GET' && path === '/hosts') {
+      const hosts = routedProjects(await registry.list()).map((p) => `${p.ref}.${domainSuffix}`)
+      res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' })
+      return res.end(hosts.map((h) => `${h}\n`).join(''))
     }
     if (!authorized(req, deps.apiToken)) throw new HttpError(401, 'Unauthorized')
 
