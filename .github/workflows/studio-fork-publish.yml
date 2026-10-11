@@ -42,9 +42,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/krowli/supabase-full-access-studio
+          # `latest` is what the running Coolify stacks pull, so only main may move it.
+          # A run dispatched on another branch gets that branch's name as its tag.
           tags: |
             type=sha,prefix={{date 'YYYY.MM.DD'}}-sha-
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' }}
 
       # apps/studio/Dockerfile declares one ARG, STUDIO_FRAMEWORK, and defaults
       # it to `next`. Upstream passes no build-args and rides that default.

@@ -556,3 +556,16 @@ existing `import/no-anonymous-default-export` warnings on the upstream route fil
   auth/rest/storage from Studio.
 - What `SUPABASE_URL` should be for a non-default project. The shared Kong routes by host, so the
   project needs either its own internal gateway or a Kong route that matches an internal host.
+
+## 10. Decisions after M1 (2026-10-12)
+
+- **`SUPABASE_URL` of a non-default project** is its public gateway URL,
+  `https://<ref>.<PROJECT_DOMAIN_SUFFIX>` (wildcard DNS → Traefik on the app server → shared
+  Kong on the database server over WireGuard). Studio's server-side GoTrue/storage calls take
+  that hairpin; the traffic is admin-only and small, and it needs no per-project internal
+  gateway. Revisit only if latency matters.
+- **Branch images.** `studio-fork-publish.yml` moves `latest` only on `main`; a run dispatched
+  on a branch is tagged with the branch name (e.g. `platform-control-plane`), so running
+  stacks that pull `latest` never get unreviewed code.
+- **Kong config updates** go through Kong's admin API (`POST /config`, DB-less), which
+  validates before applying — the control plane needs no Docker socket.
