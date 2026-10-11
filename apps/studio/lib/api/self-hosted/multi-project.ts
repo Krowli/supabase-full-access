@@ -1,8 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 import {
+  currentProjectInsertedAt,
   currentProjectName,
   currentProjectRef,
+  currentProjectStatus,
   DEFAULT_PROJECT_REF,
   projectEnv,
   projectJwtSecret,
@@ -83,11 +85,20 @@ export function applyProjectSettings(settings: ProjectSettingsFields): void {
  * project. The dashboard reads the ref for every later call from this response rather than from
  * the URL, so a detail that always says `default` would send project B's pages to project A.
  */
-export function applyProjectDetail(detail: { ref: string; name: string; restUrl: string }): void {
+export function applyProjectDetail(detail: {
+  ref: string
+  name: string
+  status: string
+  inserted_at: string
+  restUrl: string
+}): void {
   const publicUrl = new URL(projectEnv('SUPABASE_PUBLIC_URL') || 'http://localhost:8000')
   const ref = currentProjectRef()
 
   detail.ref = ref
   detail.name = projectName(ref, detail.name)
+  // The building screen shows while this is `COMING_UP` and polls `/status` until it is running.
+  detail.status = currentProjectStatus()
+  detail.inserted_at = currentProjectInsertedAt() ?? detail.inserted_at
   detail.restUrl = `${publicUrl.origin}/rest/v1/`
 }

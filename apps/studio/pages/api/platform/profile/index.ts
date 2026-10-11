@@ -1,6 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
+import { isMultiProject } from '@/lib/api/self-hosted/project-context'
+import { profileProjects } from '@/lib/api/self-hosted/project-list'
 import { DEFAULT_PROJECT } from '@/lib/constants/api'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
@@ -35,5 +37,6 @@ const handleGetAll = async (_req: NextApiRequest, res: NextApiResponse) => {
       },
     ],
   }
+  if (isMultiProject()) response.organizations[0].projects = await profileProjects() // Fork
   return res.status(200).json(response)
 }
