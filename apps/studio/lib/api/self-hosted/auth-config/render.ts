@@ -1,6 +1,8 @@
 import { chmod, mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { projectEnv } from '../project-context'
+
 /**
  * GoTrue reads every `*.env` file in its config directory in name order, and files there override
  * the container env. The `99_` prefix puts Studio's file last, so what the UI writes wins.
@@ -10,7 +12,7 @@ export const ENV_FILE_NAME = '99_studio.env'
 const ENV_KEY = /^[A-Z][A-Z0-9_]*$/
 
 export function getConfigDir(): string {
-  return process.env.GOTRUE_CONFIG_DIR ?? '/etc/gotrue'
+  return projectEnv('GOTRUE_CONFIG_DIR') ?? '/etc/gotrue'
 }
 
 /** Distinguishes concurrent writes, so two saves in flight cannot share one temp file. */

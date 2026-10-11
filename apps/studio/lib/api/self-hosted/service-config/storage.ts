@@ -3,6 +3,7 @@ import { components } from 'api-types'
 
 import { renderEnvFile, writeEnvFile } from '../auth-config/render'
 import { readJsonState, writeJsonState } from '../auth-config/state'
+import { projectEnv } from '../project-context'
 import { ServiceConfigNotFoundError, ServiceConfigValidationError } from './errors'
 
 type StorageConfig = components['schemas']['StorageConfigResponse_Output']
@@ -37,7 +38,7 @@ export const STORAGE_ENV_FILE_NAME = 'storage.env'
  * Read at call time so a test — and a compose file — can move it.
  */
 export function getStorageConfigDir(): string {
-  return process.env.STORAGE_CONFIG_DIR ?? '/etc/studio-config'
+  return projectEnv('STORAGE_CONFIG_DIR') ?? '/etc/studio-config'
 }
 
 /** storage-api's own default, and the one the compose file ships: 50 MiB. */
@@ -168,7 +169,7 @@ async function writeState(state: StorageState): Promise<void> {
 
 /** What storage-api is running with, as far as Studio's own container environment can say. */
 function envFileSizeLimit(): number {
-  const raw = process.env.UPLOAD_FILE_SIZE_LIMIT
+  const raw = projectEnv('UPLOAD_FILE_SIZE_LIMIT')
   if (raw === undefined || raw === '') return DEFAULT_FILE_SIZE_LIMIT
 
   const parsed = Number(raw)
@@ -182,10 +183,10 @@ function envFileSizeLimit(): number {
 }
 
 /** Off unless the environment says `true`, which is how storage-api reads it. */
-const envImageTransformation = (): boolean => process.env.ENABLE_IMAGE_TRANSFORMATION === 'true'
+const envImageTransformation = (): boolean => projectEnv('ENABLE_IMAGE_TRANSFORMATION') === 'true'
 
 /** On unless the environment says `false`: `S3_PROTOCOL_ENABLED` defaults to true in storage-api. */
-const envS3ProtocolEnabled = (): boolean => process.env.S3_PROTOCOL_ENABLED !== 'false'
+const envS3ProtocolEnabled = (): boolean => projectEnv('S3_PROTOCOL_ENABLED') !== 'false'
 
 /**
  * The key pair the compose file gave storage-api, presented as the one credential the page lists.
@@ -195,8 +196,8 @@ const envS3ProtocolEnabled = (): boolean => process.env.S3_PROTOCOL_ENABLED !== 
  * from.
  */
 function envCredential(): StoredCredential | null {
-  const access_key = process.env.S3_PROTOCOL_ACCESS_KEY_ID
-  const secret_key = process.env.S3_PROTOCOL_ACCESS_KEY_SECRET
+  const access_key = projectEnv('S3_PROTOCOL_ACCESS_KEY_ID')
+  const secret_key = projectEnv('S3_PROTOCOL_ACCESS_KEY_SECRET')
   if (!access_key || !secret_key) return null
 
   return {

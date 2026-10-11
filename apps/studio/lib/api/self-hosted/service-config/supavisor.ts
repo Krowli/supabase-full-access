@@ -1,6 +1,6 @@
 import { components } from 'api-types'
 
-import { AUTH_JWT_SECRET, POSTGRES_PASSWORD } from '../constants'
+import { adminJwtSecret, projectEnv, projectPostgres } from '../project-context'
 import { ServiceConfigValidationError, ServiceUnavailableError } from './errors'
 import { adminFetch } from './http'
 import { signHs256Jwt } from './jwt'
@@ -33,7 +33,7 @@ type SupavisorConfig = components['schemas']['SupavisorConfigResponse_Output']
 const supavisorUrl = () => process.env.SUPAVISOR_URL || 'http://supabase-supavisor:4000'
 
 /** The one tenant this stack runs. `dev_tenant` is what the compose file ships with. */
-const poolerTenantId = () => process.env.POOLER_TENANT_ID || 'dev_tenant'
+const poolerTenantId = () => projectEnv('POOLER_TENANT_ID') || 'dev_tenant'
 
 /** The port clients reach the pooler on in transaction mode. */
 const transactionPort = () => Number(process.env.POOLER_PROXY_PORT_TRANSACTION) || 6543
@@ -50,18 +50,18 @@ const transactionPort = () => Number(process.env.POOLER_PROXY_PORT_TRANSACTION) 
  */
 const publicHost = () => {
   try {
-    return new URL(process.env.SUPABASE_PUBLIC_URL || 'http://localhost:8000').hostname
+    return new URL(projectEnv('SUPABASE_PUBLIC_URL') || 'http://localhost:8000').hostname
   } catch {
     return 'localhost'
   }
 }
 
 /**
- * A token for one request. Supavisor's `check_auth` plug verifies it with `API_JWT_SECRET`, which
- * in this stack is the same string Studio holds as `AUTH_JWT_SECRET`, and `Supavisor.Jwt` rejects
- * a token whose `exp` is not in the future.
+ * A token for one request. Supavisor's `check_auth` plug verifies it with `API_JWT_SECRET`, the
+ * platform admin secret (`adminJwtSecret`: `PLATFORM_ADMIN_JWT_SECRET`, else `AUTH_JWT_SECRET`), and
+ * `Supavisor.Jwt` rejects a token whose `exp` is not in the future.
  */
-const token = () => signHs256Jwt({}, AUTH_JWT_SECRET)
+const token = () => signHs256Jwt({}, adminJwtSecret())
 
 const tenantUrl = () => `${supavisorUrl()}/api/tenants/${encodeURIComponent(poolerTenantId())}`
 
@@ -245,7 +245,7 @@ function toUserPayload(
     return {
       db_user: asString(user.db_user) ?? 'postgres',
       db_user_alias: asString(user.db_user_alias) ?? asString(user.db_user) ?? 'postgres',
-      db_password: asString(user.db_password) ?? POSTGRES_PASSWORD,
+      db_password: asString(user.db_password) ?? projectPostgres().password,
       is_manager: isManager,
       mode_type: asString(user.mode_type) ?? 'transaction',
       pool_checkout_timeout: asNumber(user.pool_checkout_timeout) ?? 60_000,
