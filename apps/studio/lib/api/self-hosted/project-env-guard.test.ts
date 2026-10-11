@@ -31,6 +31,7 @@ const SNAPSHOT_MODULES: Record<string, RegExp> = {
  * branch: the test fails if a merge drops it.
  */
 const GATED = [
+  'pages/api/platform/projects/[ref]/index.ts',
   'lib/api/self-hosted-admin.ts',
   'lib/api/self-hosted/service-config/postgrest.ts',
   'lib/api/self-hosted/settings.ts',
@@ -79,8 +80,8 @@ const KNOWN_SNAPSHOT_IMPORTS: Record<string, string[]> = {
     'POSTGRES_USER_READ_ONLY',
     'POSTGRES_USER_READ_WRITE',
   ],
-  // M2: the project detail, databases and props routes report `default`'s URLs and port.
   'pages/api/platform/projects/[ref]/index.ts': ['PROJECT_REST_URL'],
+  // M2: the databases and props routes report `default`'s URLs and port.
   'pages/api/platform/projects/[ref]/databases.ts': [
     'POSTGRES_PORT',
     'PROJECT_DB_HOST',
