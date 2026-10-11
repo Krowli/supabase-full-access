@@ -1,11 +1,12 @@
 import { createHmac } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 import { writeJsonState } from '../auth-config/state'
 import { AUTH_JWT_SECRET } from '../constants'
+import { runWithProject } from '../project-context'
 import { ServiceConfigValidationError, ServiceUnavailableError } from './errors'
 import { getRealtimeConfig, REALTIME_STATE_FILE_NAME, updateRealtimeConfig } from './realtime'
 
@@ -678,6 +679,66 @@ describe('api/self-hosted/service-config/realtime', () => {
       )
       // The record survives a failed write, so the next read re-applies it.
       expect(readStateFile()).toEqual({ max_concurrent_users: 1000 })
+    })
+  })
+  describe('with a project registry', () => {
+    beforeEach(() => {
+      const registry = join(dir, 'registry.json')
+      writeFileSync(
+        registry,
+        JSON.stringify({
+          projectsDir: dir,
+          projects: {
+            proj1: {
+              env: {
+                POSTGRES_HOST: 'supabase-db-uuid1',
+                POSTGRES_PASSWORD: 'proj1-db-password',
+                SUPABASE_URL: 'https://proj1.example.test',
+                SUPABASE_PUBLIC_URL: 'https://proj1.example.test',
+                SUPABASE_ANON_KEY: 'proj1-anon',
+                SUPABASE_SERVICE_KEY: 'proj1-service',
+                AUTH_JWT_SECRET: 'proj1-jwt-secret-with-at-least-32-characters',
+              },
+            },
+          },
+        })
+      )
+      vi.stubEnv('STUDIO_PROJECT_REGISTRY', registry)
+    })
+
+    // A shared Realtime keeps every tenant in the platform database (SPEC.md §8). The project's own
+    // database has no row for it, so the admin API is the read, and that is not a degradation.
+    it('reads a project tenant from the shared admin API, not from the project database', async () => {
+      realtimeHolds({ external_id: 'proj1', max_concurrent_users: 321 })
+
+      const config = await runWithProject('proj1', () => getRealtimeConfig())
+
+      expect(executeQuery).not.toHaveBeenCalled()
+      expect(callsTo('GET').map(([url]) => url)).toEqual([
+        'http://realtime-dev:4000/api/tenants/proj1',
+      ])
+      expect(config.max_concurrent_users).toBe(321)
+      expect(warnings()).toBe('')
+    })
+
+    it('writes a project settings to its own tenant', async () => {
+      await runWithProject('proj1', () => updateRealtimeConfig({ max_concurrent_users: 1000 }))
+
+      expect(callsTo('PUT').map(([url]) => url)).toEqual([
+        'http://realtime-dev:4000/api/tenants/proj1',
+      ])
+      expect(
+        JSON.parse(readFileSync(join(dir, 'proj1', 'state', REALTIME_STATE_FILE_NAME), 'utf8'))
+      ).toEqual({ max_concurrent_users: 1000 })
+    })
+
+    it('keeps reading the default tenant from its row', async () => {
+      databaseHolds({ max_concurrent_users: 500 })
+
+      const config = await runWithProject('default', () => getRealtimeConfig())
+
+      expect(executeQuery).toHaveBeenCalledOnce()
+      expect(config.max_concurrent_users).toBe(500)
     })
   })
 })

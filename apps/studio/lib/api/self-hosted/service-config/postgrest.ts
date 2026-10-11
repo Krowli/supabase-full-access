@@ -53,6 +53,15 @@ where r.rolname = 'authenticator'
 
 type RoleSettingRow = { setdatabase?: unknown; setting?: unknown }
 
+/**
+ * The schemas PostgREST was started with: the container's `PGRST_DB_SCHEMAS`, or with a project
+ * registry, this request's project's. Each project's PostgREST has its own.
+ */
+const startedWithSchemas = () =>
+  isMultiProject()
+    ? (projectEnv('PGRST_DB_SCHEMAS') ?? 'public,graphql_public')
+    : DEFAULT_EXPOSED_SCHEMAS
+
 /** A Postgres schema name, and the length Postgres truncates identifiers at. */
 const SCHEMA_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/
 const MAX_IDENTIFIER_LENGTH = 63
@@ -133,7 +142,7 @@ export async function getPostgrestConfig(): Promise<PostgrestConfig> {
     // Not an in-database setting, so there is nothing here to read it from. `null` is what the
     // platform answers when the pool is not pinned, and what the UI renders as "set elsewhere".
     db_pool: null,
-    db_schema: settings.get('pgrst.db_schemas') ?? DEFAULT_EXPOSED_SCHEMAS,
+    db_schema: settings.get('pgrst.db_schemas') ?? startedWithSchemas(),
     jwt_secret: projectEnv('AUTH_JWT_SECRET') ?? DEFAULT_AUTH_JWT_SECRET,
     max_rows:
       parseInteger(settings.get('pgrst.db_max_rows')) ??
@@ -173,7 +182,7 @@ export async function getExposedSchemas(): Promise<string> {
   try {
     return joinSchemaNames((await getPostgrestConfig()).db_schema)
   } catch {
-    return joinSchemaNames(DEFAULT_EXPOSED_SCHEMAS)
+    return joinSchemaNames(startedWithSchemas())
   }
 }
 
