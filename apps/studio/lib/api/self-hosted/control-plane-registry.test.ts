@@ -24,7 +24,7 @@ const project = (ref: string, overrides: Record<string, unknown> = {}) => ({
 })
 
 const serve = (
-  projects: unknown,
+  projects: Record<string, unknown>[],
   secrets: (ref: string) => Response = () => HttpResponse.json(SECRETS)
 ) =>
   mswServer.use(
