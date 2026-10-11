@@ -1,6 +1,6 @@
 # Multi-project self-hosted Studio: design spec
 
-Status: draft, 2026-10-12. Branch `platform/control-plane`. No code yet.
+Status: draft, 2026-10-12. Branch `platform/control-plane`. M0 done (§8); M1 code done, server check pending (§9).
 
 Goal: one Studio on the database server that lists many projects, switches between them, and has
 a "New project" button. Each project gets its own Postgres, GoTrue, PostgREST and storage-api.
@@ -427,3 +427,132 @@ one `key-auth` consumer per project key with an `acl` group, `acl allow: [<ref>]
 
 Reload procedure for the control plane: write the new declarative file, `kong config parse`,
 then `kong reload`; never reload an unparsed file. **M0 is complete.**
+
+## 9. M1 status (2026-10-12): resolver built, server check pending
+
+**What was built.** Commits `b9de5f75..6ff66ebc` on `platform/control-plane`. All paths are under `studio/`.
+
+- `lib/api/self-hosted/project-context.ts` (new, fork-owned). Loads the registry (re-read at most
+  every 30 s), keeps the request's project in `AsyncLocalStorage`, and exports `projectEnv(name)`,
+  `projectPostgres()`, `projectJwtSecret()`, `adminJwtSecret()`, `isMultiProject()`.
+- `lib/api/self-hosted/multi-project.ts` (new, fork-owned). The multi-project branch of the upstream
+  readers that hold a module constant or a singleton: connection string, one admin client per
+  project, settings fields, project detail.
+- Upstream patches, each behind `isMultiProject()` or a `process.env.X` → `projectEnv('X')` swap
+  (added/removed lines):
+
+  | File | +/- |
+  |---|---|
+  | `lib/api/apiWrapper.ts` | +3 −1 |
+  | `lib/api/self-hosted/util.ts`, `settings.ts` | +3 −0 each |
+  | `lib/api/self-hosted-admin.ts` | +4 −0 |
+  | `lib/api/self-hosted/api-keys.ts` | +5 −4 (4 swaps) |
+  | `pages/api/platform/projects/[ref]/index.ts` | +3 −0 |
+  | `pages/api/platform/auth/[ref]/{invite,magiclink,otp,recover}.ts` | +3 −2 each |
+  | `pages/api/platform/projects/[ref]/api/rest.ts` | +3 −2 |
+  | `pages/api/platform/projects/[ref]/api/graphql.ts` | +4 −3 |
+  | `pages/api/platform/projects/[ref]/{api-keys/temporary,config/index}.ts` | +2 −1 each |
+  | `pages/api/platform/storage/[ref]/buckets/[id]/objects/{sign,sign-multi,public-url}.ts` | +2 −1 each |
+
+- Fork modules switched to the resolver: `service-config/{supavisor,realtime,postgrest,storage}.ts`,
+  `auth-config/{index,render,state}.ts`. `turbo.jsonc` gained `STUDIO_PROJECT_REGISTRY` and
+  `PLATFORM_ADMIN_JWT_SECRET`.
+- Tests: `lib/api/self-hosted/project-context.test.ts` (25),
+  `tests/pages/api/platform/multi-project.test.ts` (18, real route handlers, MSW),
+  `lib/api/self-hosted/project-env-guard.test.ts` (8, risk 4).
+
+**How it behaves.**
+
+- `STUDIO_PROJECT_REGISTRY` unset: `projectEnv` is `process.env`, `apiWrapper` calls the handler
+  directly, and no `isMultiProject()` branch is taken.
+- Set: `apiWrapper` resolves `req.query.ref` (else `body.projectRef`, which the AI routes send).
+  - An unknown ref is a 404 `{ error: { message: "Project <ref> not found" } }`, and no backend is
+    called.
+  - A route that names no project runs without one. Any project reader it reaches throws, and
+    `apiWrapper` answers 500 with the message. It never falls back to `default`.
+  - `default` reads its registry `env`, else the container environment.
+  - Any other project reads only its own `env`. `POSTGRES_HOST`, `POSTGRES_PASSWORD`,
+    `SUPABASE_URL`, `SUPABASE_PUBLIC_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` and
+    `AUTH_JWT_SECRET` are required, so a missing one fails at load and never reaches `default`'s
+    backend.
+  - Derived when not set: tenant ids = ref; GoTrue, storage and state directories =
+    `<projectsDir>/<ref>/{gotrue,storage,state}`.
+- Admin secret: Supavisor and Realtime admin tokens are signed with `adminJwtSecret()`, which is
+  `PLATFORM_ADMIN_JWT_SECRET`, else `AUTH_JWT_SECRET`, else the CLI default. The project's
+  `AUTH_JWT_SECRET` is what settings, `config/index.ts` and the Data API config report.
+
+**Registry file** (M1; M4 moves it into `_platform`). Placeholders in `<>`:
+
+```json
+{
+  "projectsDir": "/data/pieowl/projects",
+  "projects": {
+    "default": {},
+    "<m0ref>": {
+      "name": "<display name>",
+      "env": {
+        "POSTGRES_HOST": "supabase-db-<project-service-uuid>",
+        "POSTGRES_PASSWORD": "<db password>",
+        "SUPABASE_URL": "http://<internal gateway for this project>:8000",
+        "SUPABASE_PUBLIC_URL": "https://<m0ref>.<domain>",
+        "SUPABASE_ANON_KEY": "<anon jwt>",
+        "SUPABASE_SERVICE_KEY": "<service_role jwt>",
+        "AUTH_JWT_SECRET": "<project jwt secret>"
+      }
+    }
+  }
+}
+```
+
+Allowed `env` names are the per-project ones in `PROJECT_ENV_NAMES` plus any `GOTRUE_*`. Anything
+else is rejected, so a typo cannot pass unnoticed. Refs must match `^[a-z0-9][a-z0-9-]{0,62}$`. An
+error message names the file, the project and the missing keys, never a value.
+
+**Tests** (`NODE_ENV=test vitest --run`, whole studio suite):
+
+| | Files | Tests | Failed |
+|---|---|---|---|
+| Before (a6ad26cf) | 726 | 8446 | 0 |
+| After (6ff66ebc) | 729 | 8497 (8446 old + 51 new) | 0 |
+
+`tsc --noEmit` passes. ESLint on the touched files gives 0 errors, and its only warnings are the
+existing `import/no-anonymous-default-export` warnings on the upstream route files.
+
+**Deviations from this spec.**
+
+- §3 described `currentProject()` returning a record. It is `projectEnv(name)` instead: an entry
+  is written in the env names Studio already reads, so each upstream patch is a token swap.
+- §3 and §6 counted six upstream files for all of B. M1 alone patches 17, because 11 route files
+  read `process.env.SUPABASE_*` directly instead of going through the leaf helpers.
+- The M3 items that guard against cross-project writes were done now: tenant ids and the
+  per-ref GoTrue, storage and state directories. Otherwise a save on project B would rewrite
+  `default`'s `99_studio.env`. M3 keeps the bind mounts, compose and the server check.
+- `projects/[ref]/index.ts` was planned for M2. It is needed now because the dashboard takes the ref
+  for later calls from that response, not from the URL.
+
+**Deferred** (each pinned in `project-env-guard.test.ts` with its reason):
+
+- **M2**
+  - `projects/[ref]/databases.ts` and `props/project/[ref]/api.ts` still report `default`'s
+    host, port and REST URL. These feed the Connect strings.
+  - The pg-meta GET routes (`pg-meta/[ref]/{tables,views,…}`) send no connection header. Nothing in
+    `data/` calls them.
+  - The `apiKey` header in `apiHelpers.ts`.
+  - MCP (`pages/api/mcp`) has no ref. Under a registry its database calls throw.
+- **M3**
+  - The Realtime settings read `_realtime.tenants` over pg-meta from the project's database. A
+    shared Realtime keeps that table in the platform database (§8), so for other projects the read
+    falls back to the admin API and logs a warning.
+  - `PGRST_DB_SCHEMAS` (`DEFAULT_EXPOSED_SCHEMAS`) is still read once, from the container.
+- **Later**
+  - The edge-functions test route.
+  - Logs (M7).
+  - Functions and snippets folders.
+
+**Not verified.**
+
+- `/project/<m0ref>/editor` on the server. That needs a Studio image from this branch, a registry
+  file holding the M0 project, and a value for `SUPABASE_URL` that reaches that project's
+  auth/rest/storage from Studio.
+- What `SUPABASE_URL` should be for a non-default project. The shared Kong routes by host, so the
+  project needs either its own internal gateway or a Kong route that matches an internal host.
