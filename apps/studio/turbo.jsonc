@@ -77,6 +77,11 @@
         "BRAINTRUST_API_KEY",
         "BRAINTRUST_PROJECT_ID",
         "AUTH_JWT_SECRET",
+        // Multi-project self-hosted Studio: the project registry file, and the secret that signs
+        // Studio's calls to the shared Supavisor and Realtime admin APIs once projects stop sharing
+        // AUTH_JWT_SECRET (see lib/api/self-hosted/project-context.ts).
+        "STUDIO_PROJECT_REGISTRY",
+        "PLATFORM_ADMIN_JWT_SECRET",
         // Supavisor's admin API, the tenant it serves, and the port clients pool through. Read by
         // the self-hosted connection-pooling endpoints (see lib/api/self-hosted/service-config).
         "SUPAVISOR_URL",
