@@ -4,6 +4,9 @@ FROM node:24-alpine
 # MinIO's client, for buckets and scoped keys (src/minio.ts). Same image and mc as the fork's
 # minio-createbucket; a static Go binary.
 COPY --from=ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z /usr/bin/mc /usr/local/bin/mc
+# The backup service (src/backup) runs from the same image: restic, and Postgres 17 clients for the
+# projects' Postgres 15 (pg_dump reads older servers; pg_restore writes to them).
+RUN apk add --no-cache restic postgresql17-client && mkdir -p /stage && chown node:node /stage
 WORKDIR /app/apps/control-plane
 COPY apps/control-plane/package.json apps/control-plane/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
