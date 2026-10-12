@@ -1316,13 +1316,11 @@ ask for the secrets of a project being deleted (they go with its rows; asking co
 registry read). `ProvisioningState` shows "<name> is being deleted" with **Delete again** (the
 control plane's next `DELETE` continues from the failed step) on every database page.
 
-**Tests.** Studio (`NODE_ENV=test vitest --run`, whole suite, JSON reporter): **8628 passed, 0
-failed** in 739 files, +14 new tests over the baseline (`project-context` +2, `control-plane-registry`
-+2, `project-switcher` +3, `ProvisioningState` +2, `ProjectLayout/index.multi-project` +5). Two files
-(`create-key-dialog.test.tsx`, `useUserProjectRegions.test.ts`, 4 tests) did not appear in that JSON
-report and pass when run alone; 8628 + 4 = 8632 = 8618 + 14. A second run with the default
-reporter during a Mac sleep had one 5 s timeout in an untouched upstream test
-(`SchemaSelector.test.tsx`). `tsc --noEmit` clean; ESLint on touched files 0 errors. Control plane:
+**Tests.** Studio (`NODE_ENV=test vitest --run`, whole suite, after `ca0ecb9b`): **741 files,
+8632 passed, 0 failed** = the 8618 baseline + 14 new (`project-context` +2, `control-plane-registry`
++2, `project-switcher` +3, `ProvisioningState` +2, `ProjectLayout/index.multi-project` +5). An
+earlier run while the operator's Mac was sleeping had one 5 s timeout in an untouched upstream
+test (`SchemaSelector.test.tsx`); the clean run above passes it. `tsc --noEmit` clean; ESLint on touched files 0 errors. Control plane:
 52 tests (49 passed, 3 registry tests skipped without `TEST_DATABASE_URL`), +1 (dashboard route) and
 `/hosts` extended; `tsc` clean.
 
