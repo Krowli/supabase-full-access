@@ -1550,8 +1550,11 @@ What replaced each `deploy.py` duty:
   server (the aliases are fixed).
 - **Projects directory** is fixed: `/data/supa-platform/projects`.
 - **Gateway on A** is the `gateway` application: an `alpine` container running the old sync script
-  (inline `content:` mount) every 15 s, with `/data/coolify/proxy/dynamic` bound in. It writes
-  `supa-platform.yaml` (was `supa-platform-staging.yaml` from the timer).
+  every 15 s, with `/data/coolify/proxy/dynamic` bound in. It writes `supa-platform.yaml` (was
+  `supa-platform-staging.yaml` from the timer). The script is the compose `command`, not a
+  `content:` file: Coolify writes a content file on the first deploy and keeps its stored copy on
+  later ones, so a changed script would never arrive. Healthy while `/hosts` answered within a
+  minute.
 
 **Not changed.** Kong and the control plane still publish `10.10.0.1:8010` and `10.10.0.1:8011`
 (WireGuard only); B stays closed. No domains are set on either application, so Coolify adds no
