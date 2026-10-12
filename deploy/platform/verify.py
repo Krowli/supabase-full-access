@@ -3,7 +3,8 @@
 
     deploy.py ... ; verify.py /tmp/platform-staging.env --platform <platform-service-uuid>
 
-Creates one project through the control-plane API, waits for ACTIVE_HEALTHY, checks REST, Auth,
+Checks the dashboard (Studio at studio.<suffix>, basic auth). Creates one project through the
+control-plane API, waits for ACTIVE_HEALTHY, checks REST, Auth,
 Storage (+ MinIO and image transforms), the pooler and Realtime from the internet and from the
 `coolify` network, restarts Kong to check the config comes back, measures RAM, then deletes the
 project and checks every registration is gone. Secrets go to remote commands on stdin only and
@@ -115,6 +116,16 @@ def main() -> None:
     admin_jwt = lambda: jwt({'role': 'service_role', 'iat': int(time.time()), 'exp': int(time.time()) + 300}, env['PLATFORM_ADMIN_JWT_SECRET'])
 
     log(f'free memory on B: {on_b("free -m | awk \'/Mem/ {print $7}\'").strip()} MB available')
+
+    studio = f'https://studio.{args.suffix}'
+    code, _ = public('GET', f'{studio}/api/platform/profile')
+    check('dashboard without credentials -> 401', code == 401, str(code))
+    basic = base64.b64encode(f'{env["DASHBOARD_USERNAME"]}:{env["DASHBOARD_PASSWORD"]}'.encode()).decode()
+    code, _ = public('GET', f'{studio}/api/platform/profile', {'Authorization': f'Basic {basic}'})
+    check('dashboard with credentials -> 200 (Studio answers)', code == 200, str(code))
+    code, body = internal('GET', f'{cp}/hosts')
+    check('/hosts lists the dashboard host', f'studio.{args.suffix}' in body.split())
+
     code, body = internal('POST', f'{cp}/projects', auth, json.dumps({'name': 'm5-verify'}))
     check('create -> 201', code == 201, str(code))
     ref = json.loads(body)['ref']
