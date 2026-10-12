@@ -80,6 +80,35 @@ describe('renderKongConfig', () => {
     })
   })
 
+  it('routes the dashboard host to Studio behind basic auth, apart from every project', () => {
+    const dashboard = { url: 'http://studio:3000', username: 'operator1', password: 'pass-word.123' }
+    const c = renderKongConfig([a], { ...opts, dashboard })
+    const d = service(c, 'dashboard')
+    expect(d.url).toBe('http://studio:3000/')
+    expect(d.route.hosts).toEqual(['studio.supa.example.com'])
+    expect(d.route.paths).toEqual(['/'])
+    expect(d.plugin('basic-auth')?.config).toEqual({ hide_credentials: true })
+    expect(d.plugin('key-auth')).toBeUndefined()
+    expect(d.read_timeout).toBeGreaterThanOrEqual(120_000)
+    const consumer = c.consumers.find((x) => x.username === 'dashboard')
+    expect(consumer).toEqual({
+      username: 'dashboard',
+      basicauth_credentials: [{ username: 'operator1', password: 'pass-word.123' }],
+    })
+    // In no ACL group: its credentials open no project route.
+    expect(consumer).not.toHaveProperty('acls')
+    // The project routes are unchanged.
+    expect(c.services.filter((s) => s.name !== 'dashboard')).toEqual(
+      renderKongConfig([a], opts).services
+    )
+    expect(() =>
+      renderKongConfig([], { ...opts, dashboard: { ...dashboard, password: "x'y\nz12345" } })
+    ).toThrow(/credentials/)
+    expect(() =>
+      renderKongConfig([], { ...opts, dashboard: { ...dashboard, url: 'http://studio:3000/x?y' } })
+    ).toThrow(/dashboard url/)
+  })
+
   it('refuses values that could inject config', () => {
     expect(() => renderKongConfig([{ ...a, ref: 'x' }], opts)).toThrow(/invalid ref/)
     expect(() => renderKongConfig([{ ...a, uuid: 'a:b' }], opts)).toThrow(/uuid/)

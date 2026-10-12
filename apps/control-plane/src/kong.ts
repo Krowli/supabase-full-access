@@ -10,7 +10,21 @@ export type KongRenderOptions = {
   domainSuffix: string
   /** The shared Realtime as Kong reaches it, e.g. http://realtime:4000. */
   realtimeUrl: string
+  /** Studio behind basic auth at `studio.<suffix>`, like the fork kong.yml's `dashboard` route. */
+  dashboard?: DashboardOptions
 }
+
+export type DashboardOptions = {
+  /** Studio as Kong reaches it, e.g. http://studio:3000. */
+  url: string
+  username: string
+  password: string
+}
+
+/** The dashboard's public host label. Project refs are 20 letters, so it cannot be a ref. */
+export const DASHBOARD_LABEL = 'studio'
+
+export const dashboardHost = (domainSuffix: string) => `${DASHBOARD_LABEL}.${domainSuffix}`
 
 type Plugin = { name: string; config?: Record<string, unknown> }
 type KongService = {
@@ -36,6 +50,34 @@ const AUTH_EXPR =
 const REF = /^[a-z]{20}$/
 const UUID = /^[a-z0-9]+$/
 const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
+const DASHBOARD_URL = /^http:\/\/[a-z0-9.-]+(:\d+)?\/?$/
+const BASIC_AUTH_VALUE = /^[A-Za-z0-9._-]{8,128}$/
+
+/**
+ * Studio (all paths) on its own host, behind basic auth. The consumer is in no ACL group, so its
+ * credentials open no project route, and no project key opens this one.
+ */
+function renderDashboard(d: DashboardOptions, domainSuffix: string) {
+  if (!DASHBOARD_URL.test(d.url)) throw new Error('Kong: invalid dashboard url')
+  if (!BASIC_AUTH_VALUE.test(d.username) || !BASIC_AUTH_VALUE.test(d.password))
+    throw new Error('Kong: dashboard credentials must be 8-128 letters, digits, ".", "_" or "-"')
+  const consumer = {
+    username: 'dashboard',
+    basicauth_credentials: [{ username: d.username, password: d.password }],
+  }
+  const service: KongService = {
+    name: 'dashboard',
+    url: `${d.url.replace(/\/+$/, '')}/`,
+    // Studio's project delete waits for the control plane's DELETE, which runs every step.
+    read_timeout: 180_000,
+    write_timeout: 180_000,
+    routes: [
+      { name: 'dashboard', hosts: [dashboardHost(domainSuffix)], paths: ['/'], strip_path: true },
+    ],
+    plugins: [{ name: 'cors' }, { name: 'basic-auth', config: { hide_credentials: true } }],
+  }
+  return { consumer, service }
+}
 
 /** Renders the full declarative config. Throws on any value that does not look right. */
 export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOptions): KongConfig {
@@ -187,6 +229,11 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
         route: { request_buffering: false, response_buffering: false },
       }
     )
+  }
+  if (opts.dashboard) {
+    const { consumer, service } = renderDashboard(opts.dashboard, opts.domainSuffix)
+    consumers.unshift(consumer)
+    services.unshift(service)
   }
   return { _format_version: '3.0', consumers, services }
 }

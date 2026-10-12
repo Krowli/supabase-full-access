@@ -2,7 +2,7 @@ import pg from 'pg'
 
 import { loadConfig } from './config.ts'
 import { createCoolifyClient } from './coolify.ts'
-import { KongGateway, renderKongConfig, type GatewayProject } from './kong.ts'
+import { KongGateway, dashboardHost, renderKongConfig, type GatewayProject } from './kong.ts'
 import { createMinioStorage } from './minio.ts'
 import { Provisioner, routedProjects } from './provisioner.ts'
 import { createPgRegistry, migrate } from './registry.ts'
@@ -38,6 +38,7 @@ const gateway = new KongGateway({
     renderKongConfig(projects, {
       domainSuffix: config.domainSuffix,
       realtimeUrl: config.realtimeUrl,
+      dashboard: config.dashboard,
     }),
   log,
 })
@@ -73,6 +74,7 @@ const server = createApp({
   provisioner,
   apiToken: config.apiToken,
   domainSuffix: config.domainSuffix,
+  extraHosts: config.dashboard ? [dashboardHost(config.domainSuffix)] : [],
 })
 server.listen(config.port, () => log('server.listening', { port: config.port }))
 
