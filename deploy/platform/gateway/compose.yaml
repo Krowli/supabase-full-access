@@ -41,7 +41,7 @@ services:
           # Next to the target, so the rename is atomic; Traefik skips files without .yaml.
           tmp=$(mktemp "/dynamic/.$NAME.XXXXXX")
           {
-            echo "# Managed by the Coolify application supa-platform-gateway (deploy/platform/gateway). Do not edit."
+            echo "# Managed by deploy/platform/gateway/compose.yaml, a Coolify application on this server. Do not edit."
             echo "http:"
             echo "  middlewares:"
             echo "    $NAME-https:"
