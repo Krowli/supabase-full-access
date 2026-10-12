@@ -1,6 +1,6 @@
 # Multi-project self-hosted Studio: design spec
 
-Status: draft, 2026-10-12. Branch `platform/control-plane`. M0 done (§8); M1 code done (§9); M2 and the M3 Studio side code done, server checks pending (§11); M6 Studio side code done, server check pending (§12).
+Status: draft, 2026-10-12. Branch `platform/control-plane`. Installed by Coolify buttons (§17). M0 done (§8); M1 code done (§9); M2 and the M3 Studio side code done, server checks pending (§11); M6 Studio side code done, server check pending (§12).
 
 Goal: one Studio on the database server that lists many projects, switches between them, and has
 a "New project" button. Each project gets its own Postgres, GoTrue, PostgREST and storage-api.
@@ -1151,26 +1151,8 @@ Control-plane env added in M5: `KONG_ADMIN_URL`, `KONG_ADMIN_TOKEN`, `SUPAVISOR_
 `PROJECT_S3_ENDPOINT`, `PROJECT_IMGPROXY_URL` (the compose sets the URLs to the stack's short
 names). Removed: `PROJECT_STORAGE_BACKEND`, `PROJECT_S3_ACCESS_KEY`, `PROJECT_S3_SECRET_KEY`.
 
-**How to redeploy.**
-
-```bash
-# 1. An image for the new commit: the workflow (once it is on main), or on B:
-git archive --format=tar HEAD apps/control-plane deploy/platform/project-compose.yaml | gzip > /tmp/cp.tgz
-scp -o ProxyJump=root@203.0.113.10 /tmp/cp.tgz root@10.10.0.1:/tmp/
-ssh -J root@203.0.113.10 root@10.10.0.1 'mkdir /tmp/cp-src && tar -xzf /tmp/cp.tgz -C /tmp/cp-src && cd /tmp/cp-src &&
-  docker build -f apps/control-plane/Dockerfile -t ghcr.io/krowli/supabase-control-plane:sha-<sha> . && rm -rf /tmp/cp-src /tmp/cp.tgz'
-# 2. Push the compose with the tag, re-apply the env, restart:
-deploy/platform/deploy.py deploy /tmp/platform-staging.env --project ipffkzbu5u5y7qjtxtbbxi58 \
-  --environment staging --server l6kmhkc8cr107te5xkqs9ese --tag sha-<sha> --service <uuid>
-# 3. Check end to end (creates and deletes one project):
-deploy/platform/verify.py /tmp/platform-staging.env --platform <uuid>
-```
-
-Gateway host (A): `deploy/platform/gateway/supa-platform-sync.sh` is installed as
-`/usr/local/bin/supa-platform-staging-sync`, with the `.service` and `.timer` units in
-`/etc/systemd/system/`. Removing the staging gateway: `systemctl disable --now
-supa-platform-staging-sync.timer`, delete the three files and
-`/data/coolify/proxy/dynamic/supa-platform-staging.yaml`.
+**How to redeploy.** Superseded: the platform is a Coolify application now, installed and
+updated with Coolify's buttons, and `deploy.py` and the gateway timer are gone (§17).
 
 **Test results.**
 
@@ -1522,3 +1504,63 @@ available.
 - B's Coolify proxy logs a failed ACME attempt for `studio.supa.example.com` on each reload (above).
 - Unchanged from §15: `default` reads before the redirect answer 500 "no stack here", snippets
   shared, no Logflare, MCP refused, control-plane image built on B, operator's Coolify token.
+
+## 17. Install by Coolify buttons (2026-10-12)
+
+The platform installs and updates with Coolify actions only; `deploy.py` and the gateway's systemd
+timer are deleted. Everything below was done on the staging install and checked end to end.
+
+**Two Coolify applications** (Docker Compose build pack, from this public repo, branch
+`platform/control-plane`), both in the Coolify project "Platform (staging)", environment `staging`:
+
+| Application | Server | Compose file | To fill in |
+|---|---|---|---|
+| `platform` (`<platform-app-uuid>`) | db-b | `/deploy/platform/platform-compose.yaml` | `CONTROL_PLANE_COOLIFY_TOKEN` |
+| `gateway` (`<app-uuid>`) | localhost (A) | `/deploy/platform/gateway/compose.yaml` | nothing |
+
+What replaced each `deploy.py` duty:
+
+- **Secrets** are Coolify magic variables in the compose, generated on the first load of the
+  compose file and shown under Environment Variables: `SERVICE_PASSWORD_*` (32 letters and
+  digits), `SERVICE_PASSWORD_64_*`, `SERVICE_USER_*` (16), `SERVICE_HEX_64_SECRETSKEY` (64 hex,
+  `PLATFORM_SECRETS_KEY`). Checked in Coolify 4.4.6 `generateEnvValue()` and
+  `parseCommandFromMagicEnvVariable()` (no underscore in the name after the generator). Realtime
+  needs a 16-character `DB_ENC_KEY`: its command cuts the 32-character value with `printf %.16s`.
+  Dashboard login: `SERVICE_USER_STUDIO` / `SERVICE_PASSWORD_STUDIO`.
+- **Plain settings** have defaults in the compose (`${VAR:-default}`), so Coolify pre-fills them:
+  `PROJECT_DOMAIN_SUFFIX`, `CONTROL_PLANE_COOLIFY_URL`; on A `PLATFORM_HOSTS_URL`,
+  `PLATFORM_KONG_URL`. `CONTROL_PLANE_COOLIFY_TOKEN` is `${VAR:?}`: Coolify marks it required and
+  leaves it empty (a message after `?` would become the value).
+- **The control-plane image** is built by Coolify on the server on every deploy (`build:` with the
+  repo root as context). `control-plane-publish.yml` is no longer needed for the platform.
+- **Studio** is pinned by digest in the compose; a new Studio is a commit, then Deploy.
+- **Coolify target.** The control plane reads its own application uuid (`COOLIFY_RESOURCE_UUID`,
+  which Coolify sets in every container of a compose application), takes the project and server
+  from `GET /applications/<uuid>`, and creates the `projects` environment (`POST
+  /projects/<uuid>/environments`, 409 when it exists). `src/coolify.ts` `resolveCoolifyTarget`,
+  tested in `test/coolify-target.test.ts`.
+- **Networking.** Compose applications name containers `<service>-<uuid>-<timestamp>` unless
+  "Consistent container names" is on (Coolify `generateApplicationContainerName()`), so other
+  stacks reach the platform by fixed aliases on the `coolify` network: `supa-platform-minio`,
+  `-imgproxy`, `-studio` (project stacks), `-control-plane`, `-kong`, `-supavisor`, `-realtime`,
+  `-postgres-meta`. The compose declares `coolify` as an external network itself, so the
+  "Connect to Predefined Network" checkbox stays off; `platform-db` and `projects-dir` are not on
+  it. Compose also adds each short service name as an alias there; project stacks name their
+  services `supabase-*`, and Pieowl's and ProjectB's stacks are not on `coolify`. One platform per
+  server (the aliases are fixed).
+- **Projects directory** is fixed: `/data/supa-platform/projects`.
+- **Gateway on A** is the `gateway` application: an `alpine` container running the old sync script
+  (inline `content:` mount) every 15 s, with `/data/coolify/proxy/dynamic` bound in. It writes
+  `supa-platform.yaml` (was `supa-platform-staging.yaml` from the timer).
+
+**Not changed.** Kong and the control plane still publish `10.10.0.1:8010` and `10.10.0.1:8011`
+(WireGuard only); B stays closed. No domains are set on either application, so Coolify adds no
+proxy labels.
+
+**Checks.** `verify.py --app <platform-app-uuid>` (reads the secrets from Coolify's API;
+finds containers by their Compose labels): 42 of 42 pass, create to ACTIVE_HEALTHY 20 s,
+certificate 10 s, recovery after a Coolify restart 86 s. Through Studio's own API with the
+dashboard login: two projects created, both listed and opened, auto-confirm switched on in auth
+settings, sign-up, sign-in, `/auth/v1/user` and REST as that user, then both deleted and the
+`projects` environment left empty. Control plane: 61 tests pass, `tsc --noEmit` clean.
+
