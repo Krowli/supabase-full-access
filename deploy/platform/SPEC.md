@@ -1245,3 +1245,145 @@ Test-only leftovers removed: the throwaway Kong and Postgres containers and one 
   wildcard for `*.supa.aioomi.com` (needs a DNS provider API token in A's Traefik) would remove
   the per-project certificate and the `/hosts` poll.
 - Move the secrets file out of `/tmp`.
+
+## 15. M7 integration status (2026-10-12): Studio in the staging platform stack
+
+**What is deployed** (Coolify project "Platform (staging)", service `ek4p8lw9xb1hxwmv9rp9wm9e` on
+server B; commits `71399f9a..` on `platform/control-plane`).
+
+| Container | Image |
+|---|---|
+| `studio` (new) | `ghcr.io/krowli/supabase-full-access-studio:platform-control-plane@sha256:c7d769be3ced293cb633451ed06625531d6956f1c9ed7f65f2bd9f936db7ad32` (commit `ca0ecb9b`, `NEXT_PUBLIC_IS_MULTI_PROJECT=true`; `latest` untouched) |
+| `control-plane` | `ghcr.io/krowli/supabase-control-plane:sha-71399f9a9c1f352e10557568040c293a5fde3e34` (built on B as in §14) |
+| the rest | unchanged from §14 |
+
+- **URL:** `https://studio.supa.aioomi.com`. Kong (the platform's, `10.10.0.1:8010`) routes the host
+  to `http://studio:3000` behind `basic-auth`; the control plane renders that route
+  (`apps/control-plane/src/kong.ts`, `renderDashboard`) when `DASHBOARD_URL` is set. The basic-auth
+  consumer is in no ACL group, so its credentials open no project route, and no project key opens
+  the dashboard. The service's read timeout is 180 s (a project delete waits for every step).
+- **Log in:** the browser asks for basic auth. User and password are `DASHBOARD_USERNAME` and
+  `DASHBOARD_PASSWORD` in the SOPS file `infra/platform/staging.env` (`sops decrypt
+  platform/staging.env`). They were rotated once during M7 (the first pair was printed to an
+  operator log by mistake). After basic auth Studio has no login of its own.
+- **TLS:** `/hosts` lists `studio.<suffix>` first; the A-side sync script now accepts the label
+  `studio` (`DASHBOARD_LABEL`) besides 20-letter refs, so the dashboard host gets its own
+  HTTP-01 certificate the same way projects do. The installed script on A and its copy in
+  `infra/servers/a/` match `deploy/platform/gateway/supa-platform-sync.sh`.
+- **Studio env** (`platform-compose.yaml`): `STUDIO_PROJECT_REGISTRY_URL=http://control-plane:8080`
+  (same stack, short name), `STUDIO_PROJECT_REGISTRY_TOKEN=$CONTROL_PLANE_TOKEN`,
+  `STUDIO_PROJECT_DOMAIN_SUFFIX=$PROJECT_DOMAIN_SUFFIX`, `STUDIO_DEFAULT_PROJECT=none`,
+  `STUDIO_PG_META_URL=http://postgres-meta:8080` + `PG_META_CRYPTO_KEY`,
+  `PLATFORM_ADMIN_JWT_SECRET`, `SUPAVISOR_URL`/`REALTIME_URL` (shared services),
+  `STUDIO_INTERNAL_URL=http://studio-<platform-uuid>:3000` (project GoTrue fetches email templates
+  over `coolify`), `SNIPPETS_MANAGEMENT_FOLDER` (volume `studio-snippets`). The per-project config
+  dir is the bind `/data/supa-platform-staging/projects` → `/data/pieowl/projects` (Studio's fixed
+  `projectsDir`; the host path avoids anything named after Pieowl).
+- **deploy.py** now also takes `--studio-image <image>@sha256:<digest>` (refuses an unpinned
+  image), generates `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` with `secrets`, and sets
+  `STUDIO_INTERNAL_URL`. Redeploy:
+
+  ```bash
+  sops decrypt infra/platform/staging.env > /tmp/plt/staging.env   # mode 600
+  deploy/platform/deploy.py deploy /tmp/plt/staging.env --project ipffkzbu5u5y7qjtxtbbxi58 \
+    --environment staging --server l6kmhkc8cr107te5xkqs9ese --service ek4p8lw9xb1hxwmv9rp9wm9e \
+    --tag sha-71399f9a9c1f352e10557568040c293a5fde3e34 \
+    --studio-image ghcr.io/krowli/supabase-full-access-studio:platform-control-plane@sha256:c7d769be3ced293cb633451ed06625531d6956f1c9ed7f65f2bd9f936db7ad32
+  deploy/platform/verify.py /tmp/plt/staging.env --platform ek4p8lw9xb1hxwmv9rp9wm9e
+  ```
+
+**`default` on a platform with no single-project stack.** Chosen: `STUDIO_DEFAULT_PROJECT=none`
+makes `default` a stackless entry that lands on the project list.
+
+- Server (`project-context.ts`, `project-list.ts`, `multi-project.ts`): `default` reads nothing from
+  the container environment, so every backend read for it throws ("Project default has no stack
+  here …") instead of reaching whatever `POSTGRES_HOST`/`db` resolves to; it is left out of every
+  project list (switcher, org page, profile); its detail still answers, with status `REMOVED` and
+  no endpoint.
+- Client (`ProjectLayout` `ContentWrapper`, 7 lines; `ProvisioningState.tsx`): `default` with
+  `REMOVED` is `router.replace('/org/default-org-slug')`, upstream's project list of the one
+  organization (search, status filter, cards, "New project"). `REMOVED` because no layout draws a
+  screen for it; `INACTIVE` would have been upstream's "paused" screen on every page but home.
+- Why this one: `/`, the sign-in redirect, the home icon, the 404 fallback and the delete dialog
+  all go to `/project/default` (7 upstream places plus `redirects.shared.ts`, which is build time),
+  so `default` has to exist; pointing it at the platform's own Postgres would have put the
+  registry, the Supavisor and Realtime metadata one SQL Editor query away from a typo; hiding it
+  everywhere would have meant patching every one of those places. Without the variable nothing
+  changes (single-project and Pieowl/Taxroam-style stacks keep `default` as before).
+
+**DELETING (M5 status).** `control-plane-registry.ts` maps `DELETING` → `GOING_DOWN` and does not
+ask for the secrets of a project being deleted (they go with its rows; asking could fail the whole
+registry read). `ProvisioningState` shows "<name> is being deleted" with **Delete again** (the
+control plane's next `DELETE` continues from the failed step) on every database page.
+
+**Tests.** Studio (`NODE_ENV=test vitest --run`, whole suite, JSON reporter): **8628 passed, 0
+failed** in 739 files, +14 new tests over the baseline (`project-context` +2, `control-plane-registry`
++2, `project-switcher` +3, `ProvisioningState` +2, `ProjectLayout/index.multi-project` +5). Two files
+(`create-key-dialog.test.tsx`, `useUserProjectRegions.test.ts`, 4 tests) did not appear in that JSON
+report and pass when run alone; 8628 + 4 = 8632 = 8618 + 14. A second run with the default
+reporter during a Mac sleep had one 5 s timeout in an untouched upstream test
+(`SchemaSelector.test.tsx`). `tsc --noEmit` clean; ESLint on touched files 0 errors. Control plane:
+52 tests (49 passed, 3 registry tests skipped without `TEST_DATABASE_URL`), +1 (dashboard route) and
+`/hosts` extended; `tsc` clean.
+
+**verify.py** (3 new checks: dashboard 401 without credentials, 200 with, `/hosts` lists the
+dashboard): **32 of 32 pass** (log kept as `/tmp/plt/verify-m7.log` on the operator Mac). Create →
+`ACTIVE_HEALTHY` 23 s, certificate at once, Coolify restart of the whole stack → routes back in
+13 s, delete leaves nothing. RAM: platform stack 1058 MB with Studio (was ~850-890), one project
+337 MB; B had 2.1-2.2 GB available.
+
+**End to end in a real browser** (Playwright 1.64 + Chrome for Testing, headless, basic auth via
+`httpCredentials`; scripts in `/tmp/plt/scripts/`, screenshots and logs in `/tmp/plt/e2e/`):
+
+| Step | Result |
+|---|---|
+| `https://studio.supa.aioomi.com/` | lands on `/org/default-org-slug`, "Create a project" empty state (`01-one-landing.png`) |
+| New project "e2e-one" (org page) → building screen → home | submit 0.2 s, building screen shown, **home after 21.8 s** (`01-one-*`) |
+| SQL Editor: create table + insert (Studio asks about RLS → "Run and enable RLS") | 7.1 s (`02-one-sql.png`) |
+| Table Editor shows the table and its row | 3.7 s (`02-one-table-editor.png`) |
+| Auth → Users loads | 3.4 s (`02-one-auth-users.png`) |
+| Storage → create bucket | 6.5 s (`02-one-storage.png`) |
+| API keys (legacy tab shows the project's anon/service keys), Data API URL, Connect sheet | own host `https://<ref>.supa.aioomi.com`, no `localhost` (`02-one-api-keys*.png`, `02-one-data-api.png`, `02-one-connect.png`) |
+| New project "e2e-two" from the header dropdown | home after 21.8 s (`03-two-*`); same pages pass (`04-two-*`) |
+| Switch in the dropdown | 4.0 s; e2e-one shows only `e2e_t_one`, e2e-two only `e2e_t_two`, and back (`05-switch-*`); "Default Project" is no longer listed |
+| Delete both via Settings → General → Delete project | 7.9 s each in the UI, lands on the project list (`06-two-*`, `07-one-*`) |
+| Afterwards | control plane 0 projects; `/hosts` = `studio.supa.aioomi.com` only; Coolify `GET /services/<uuid>` 404 and the `projects` environment empty; on B 0 containers, volumes, networks and service dirs for both uuids; MinIO 0 buckets, 0 service accounts; public REST for the old ref 404 (`run-08-gone.log`) |
+
+Console/HTTP errors seen: while a project is `COMING_UP` the header and Connect queries
+(`databases`, `settings`, `api-keys`, two `pg-meta` queries) answer 500 "Project <ref> is not ready
+(COMING_UP)" and are retried until it is up (3-5 times each); the two same queries for `default`
+fire once before the redirect to the project list (500 "no stack here"); after a delete the open
+tab re-reads the deleted project once or twice (404) before it moves; `run-lints` for `default`
+answers 400 (upstream, single-project too). One `[pageerror] Object` from the SQL editor (Monaco)
+on one run. None blocks a step.
+
+**Open issues.**
+
+- **Project auth/storage settings do not reach the projects yet.** Studio writes
+  `<projectsDir>/<ref>/{gotrue,storage}` (now `/data/supa-platform-staging/projects` on B), but
+  `project-compose.yaml` still mounts per-service named volumes there (§13 deviation, "M3 swaps
+  them"). Bind the project stacks to the same host dir, and remove `<ref>/` on delete (the control
+  plane does not today).
+- Not-ready reads answer **500**; a 503 (or `ProjectContextError` → 409) would read as "not yet"
+  rather than a failure in the console.
+- The "being deleted" screen was not caught live (the delete finished before a second tab loaded);
+  it is covered by `ProvisioningState.test.tsx` and `index.multi-project.test.tsx`.
+- The org page's sidebar keeps upstream's Team / Usage / Billing links, which do nothing self-hosted.
+- Snippets are one folder for all projects; logs (no Logflare in the platform), MCP (refused, §11),
+  the edge-functions test route, per-project publishable/secret keys (only legacy keys exist) remain
+  as in §11-§12.
+- `control-plane-publish.yml` still cannot be dispatched until it is on `main`; the image is built on B.
+- The control plane still uses the operator's Coolify token (§14, "owner to do").
+
+**How to move Pieowl/Taxroam Supabase onto the platform later (not done).**
+
+1. Create the project through the platform (`POST /projects {name}` or Studio) so it gets a ref,
+   secrets, a stack, tenants, a bucket and a Kong route; keep it unused.
+2. Freeze writes on the old stack, `pg_dump` the old database (roles/`auth`/`storage` schemas
+   included, `--no-owner` where roles differ) and restore into `supabase-db-<uuid>`; copy objects
+   from the old storage into MinIO bucket `<ref>` (`mc mirror`).
+3. Either keep the old JWT secret and keys (write them into `project_secrets` before the first
+   start, so existing clients and sessions keep working) or rotate clients to the new keys.
+4. Point the app at `https://<ref>.supa.aioomi.com` (or add a custom host to the Kong route and
+   the A-side certificate list), check, then delete the old Coolify stack. Do it on staging with a
+   copy first; Pieowl and Taxroam stay untouched until then.
