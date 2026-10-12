@@ -6,8 +6,8 @@
         kept, so running it again never rotates anything. Values are never printed.
 
     deploy.py deploy FILE --project UUID --environment NAME --server UUID --tag TAG
-              [--service UUID] [--projects-environment NAME] [--domain-suffix SUFFIX]
-        Renders the compose with the control-plane image tag, creates the Coolify service (or
+              --studio-image IMAGE@sha256:DIGEST [--service UUID] [--projects-environment NAME] [--domain-suffix SUFFIX]
+        Renders the compose with the control-plane image tag and the Studio image, creates the Coolify service (or
         updates --service), turns on connect_to_docker_network, sets the env (secrets from FILE,
         the Coolify token from ~/.coolify-token) and (re)starts it. Prints the service uuid.
 
@@ -18,6 +18,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import secrets
 import string
 import sys
@@ -43,6 +44,9 @@ GENERATED = {
     'KONG_ADMIN_TOKEN': 40,
     'CONTROL_PLANE_TOKEN': 40,
     'PLATFORM_SECRETS_KEY': 64,  # hex below: 32 bytes
+    # Basic auth in front of Studio (Kong's dashboard route at studio.<suffix>).
+    'DASHBOARD_USERNAME': 16,
+    'DASHBOARD_PASSWORD': 32,
 }
 
 
@@ -99,6 +103,9 @@ def cmd_deploy(args) -> None:
     if not all(c in ALNUM + '.-_' for c in args.tag):
         sys.exit('bad tag')
     compose = compose.replace('{{CONTROL_PLANE_TAG}}', args.tag)
+    if not re.fullmatch(r'[a-z0-9./_-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}', args.studio_image):
+        sys.exit('--studio-image must be pinned by digest: <image>[:tag]@sha256:<64 hex>')
+    compose = compose.replace('{{STUDIO_IMAGE}}', args.studio_image)
     raw = base64.b64encode(compose.encode()).decode()
 
     uuid = args.service
@@ -130,6 +137,7 @@ def cmd_deploy(args) -> None:
         # The `coolify` network aliases of this stack's containers, as project stacks see them.
         'PROJECT_S3_ENDPOINT': f'http://minio-{uuid}:9000',
         'PROJECT_IMGPROXY_URL': f'http://imgproxy-{uuid}:8080',
+        'STUDIO_INTERNAL_URL': f'http://studio-{uuid}:3000',
     })
     data = [{'key': k, 'value': v, 'is_literal': True} for k, v in env.items()]
     coolify('PATCH', f'/services/{uuid}/envs/bulk', {'data': data})
@@ -151,6 +159,7 @@ def main() -> None:
     d.add_argument('--environment', required=True)
     d.add_argument('--server', required=True)
     d.add_argument('--tag', required=True)
+    d.add_argument('--studio-image', required=True)
     d.add_argument('--service')
     d.add_argument('--projects-environment', default='projects')
     d.add_argument('--domain-suffix', default='supa.aioomi.com')

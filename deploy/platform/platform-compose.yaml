@@ -8,6 +8,8 @@
 # (kong, realtime, minio, ...) work. Nothing is published except Kong's proxy on the WireGuard
 # address, where the gateway host's Traefik sends *.<PROJECT_DOMAIN_SUFFIX>, and the control
 # plane's port for the gateway host to read /hosts (the API itself needs CONTROL_PLANE_TOKEN).
+# Studio (multi-project) is reached only through Kong, at studio.<PROJECT_DOMAIN_SUFFIX> with
+# basic auth (DASHBOARD_USERNAME / DASHBOARD_PASSWORD; the control plane renders that route).
 #
 # Env (Coolify service env, all secrets generated outside Coolify):
 #   PLATFORM_DB_PASSWORD, PLATFORM_ADMIN_JWT_SECRET (Supavisor and Realtime admin API, later
@@ -17,7 +19,8 @@
 #   PLATFORM_SECRETS_KEY, CP_COOLIFY_URL, CP_COOLIFY_TOKEN, CP_COOLIFY_PROJECT_UUID,
 #   CP_COOLIFY_ENVIRONMENT, CP_COOLIFY_SERVER_UUID (prefixed so they cannot collide with the
 #   COOLIFY_* variables Coolify sets itself), PROJECT_DOMAIN_SUFFIX, PROJECT_S3_ENDPOINT (http://minio-<this-uuid>:9000),
-#   PROJECT_IMGPROXY_URL (http://imgproxy-<this-uuid>:8080).
+#   PROJECT_IMGPROXY_URL (http://imgproxy-<this-uuid>:8080), DASHBOARD_USERNAME,
+#   DASHBOARD_PASSWORD, STUDIO_INTERNAL_URL (http://studio-<this-uuid>:3000).
 services:
   platform-db:
     image: 'postgres:17-alpine'
@@ -61,7 +64,7 @@ services:
       - KONG_NGINX_ADMIN_INCLUDE=/tmp/admin-guard.conf
       - 'KONG_ADMIN_TOKEN=${KONG_ADMIN_TOKEN}'
       # The control plane applies the whole declarative config with POST /config (src/kong.ts).
-      - 'KONG_PLUGINS=request-transformer,cors,key-auth,acl,request-termination,post-function'
+      - 'KONG_PLUGINS=request-transformer,cors,key-auth,acl,request-termination,post-function,basic-auth'
       - 'KONG_DNS_ORDER=LAST,A,CNAME'
       - KONG_DNS_NOT_FOUND_TTL=1
       - KONG_NGINX_WORKER_PROCESSES=2
@@ -216,9 +219,60 @@ services:
       - 'MINIO_URL=http://minio:9000'
       - 'MINIO_ROOT_USER=${MINIO_ROOT_USER}'
       - 'MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}'
+      # Kong routes studio.<suffix> to Studio with basic auth (src/kong.ts, renderDashboard).
+      - 'DASHBOARD_URL=http://studio:3000'
+      - 'DASHBOARD_USERNAME=${DASHBOARD_USERNAME}'
+      - 'DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}'
     ports:
       - '10.10.0.1:8011:8080'
+
+  studio:
+    # Multi-project Studio (built with NEXT_PUBLIC_IS_MULTI_PROJECT=true; deploy.py fills in the
+    # image, pinned by digest). Every project comes from the control plane (SPEC.md §11-§12).
+    image: '{{STUDIO_IMAGE}}'
+    depends_on:
+      control-plane:
+        condition: service_started
+      postgres-meta:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - '-e'
+        - "fetch('http://127.0.0.1:3000/api/platform/profile').then((r) => {if (r.status !== 200) throw new Error(r.status)})"
+      timeout: 5s
+      interval: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      - HOSTNAME=0.0.0.0
+      # The registry: the control plane in this stack (same service network, short name).
+      - 'STUDIO_PROJECT_REGISTRY_URL=http://control-plane:8080'
+      - 'STUDIO_PROJECT_REGISTRY_TOKEN=${CONTROL_PLANE_TOKEN}'
+      - 'STUDIO_PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX}'
+      # No single-project stack here: `default` is the project list, not a database (SPEC.md §15).
+      - STUDIO_DEFAULT_PROJECT=none
+      - 'DEFAULT_ORGANIZATION_NAME=Platform (staging)'
+      # Shared services. pg-meta only reaches a database through Studio's encrypted header.
+      - 'STUDIO_PG_META_URL=http://postgres-meta:8080'
+      - 'PG_META_CRYPTO_KEY=${PG_META_CRYPTO_KEY}'
+      - 'PLATFORM_ADMIN_JWT_SECRET=${PLATFORM_ADMIN_JWT_SECRET}'
+      - 'SUPAVISOR_URL=http://supavisor:4000'
+      - POOLER_PROXY_PORT_TRANSACTION=6543
+      - 'REALTIME_URL=http://realtime:4000'
+      # Project GoTrue containers fetch email templates from here over the `coolify` network.
+      - 'STUDIO_INTERNAL_URL=${STUDIO_INTERNAL_URL}'
+      - SNIPPETS_MANAGEMENT_FOLDER=/app/snippets
+      - ENABLED_FEATURES_AUTHENTICATION_THIRD_PARTY_AUTH=false
+      - UPLOAD_FILE_SIZE_LIMIT=524288000
+    volumes:
+      - 'studio-snippets:/app/snippets'
+      # Per-project GoTrue, storage and state files Studio writes (<ref>/{gotrue,storage,state})
+      # under its fixed projectsDir; on the host they live under the platform's own path.
+      - '/data/supa-platform-staging/projects:/data/pieowl/projects'
 
 volumes:
   platform-db-data:
   minio-data:
+  studio-snippets:
