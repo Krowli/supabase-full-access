@@ -1,6 +1,6 @@
 import { getCreateMigrationsTableSQL, getInsertMigrationSQL } from '@supabase/pg-meta'
 
-import { isResponseOk } from './api/apiWrapper'
+import { isResponseOk } from './api/apiWrapper.browser'
 import { fetchHandler } from '@/data/fetchers'
 import type { Integration } from '@/data/integrations/integrations.types'
 import { BASE_PATH } from '@/lib/constants'
