@@ -13,6 +13,10 @@
 # label DASHBOARD_LABEL (the control plane's Studio route, kong.ts) gets a certificate too.
 # Stopping or deleting this application leaves the last file in place; delete
 # /data/coolify/proxy/dynamic/supa-platform.yaml to take the route down.
+#
+# The script is the command itself, not a `content:` file: Coolify keeps a content file from the
+# first deploy and does not rewrite it on the next one, so a change here would not arrive. `$$` is
+# a literal `$` for Compose.
 services:
   sync:
     image: 'alpine:3.22'
@@ -22,61 +26,64 @@ services:
       - 'SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.example.com}'
       - 'HOSTS_URL=${PLATFORM_HOSTS_URL:-http://10.10.0.1:8011/hosts}'
       - 'KONG_URL=${PLATFORM_KONG_URL:-http://10.10.0.1:8010}'
-    command: ['/bin/sh', '-c', 'while :; do /bin/sh /sync.sh; sleep 15; done']
     volumes:
       - '/data/coolify/proxy/dynamic:/dynamic'
-      -
-        type: bind
-        source: ./sync.sh
-        target: /sync.sh
-        content: |
+    command:
+      - /bin/sh
+      - '-c'
+      - |
+        while :; do
+          (
           set -eu
           NAME=supa-platform
-          OUT=/dynamic/$NAME.yaml
+          OUT=/dynamic/$$NAME.yaml
           DASHBOARD_LABEL=studio
 
-          hosts=$(wget -q -T 5 -O - "$HOSTS_URL") || exit 0
-          esc=$(printf '%s' "$SUFFIX" | sed 's/\./\\./g')
-          rule=$(printf "HostRegexp(\`^[a-z0-9-]+\\\\.%s\$\`)" "$esc")
+          hosts=$$(wget -q -T 5 -O - "$$HOSTS_URL") || exit 0
+          esc=$$(printf '%s' "$$SUFFIX" | sed 's/\./\\./g')
+          rule=$$(printf "HostRegexp(\`^[a-z0-9-]+\\\\.%s\$$\`)" "$$esc")
           # Next to the target, so the rename is atomic; Traefik skips files without .yaml.
-          tmp=$(mktemp "/dynamic/.$NAME.XXXXXX")
+          tmp=$$(mktemp "/dynamic/.$$NAME.XXXXXX")
           {
             echo "# Managed by deploy/platform/gateway/compose.yaml, a Coolify application on this server. Do not edit."
             echo "http:"
             echo "  middlewares:"
-            echo "    $NAME-https:"
+            echo "    $$NAME-https:"
             echo "      redirectScheme: {scheme: https}"
             echo "  routers:"
-            echo "    $NAME-http:"
-            printf "      rule: '%s'\n" "$rule"
+            echo "    $$NAME-http:"
+            printf "      rule: '%s'\n" "$$rule"
             echo "      entryPoints: [http]"
-            echo "      middlewares: [$NAME-https]"
-            echo "      service: $NAME"
-            echo "    $NAME:"
-            printf "      rule: '%s'\n" "$rule"
+            echo "      middlewares: [$$NAME-https]"
+            echo "      service: $$NAME"
+            echo "    $$NAME:"
+            printf "      rule: '%s'\n" "$$rule"
             echo "      entryPoints: [https]"
-            echo "      service: $NAME"
+            echo "      service: $$NAME"
             echo "      tls:"
             echo "        certResolver: letsencrypt"
             echo "        domains:"
-            for h in $hosts; do
-              case "$h" in
-                *."$SUFFIX") ;;
+            for h in $$hosts; do
+              case "$$h" in
+                *."$$SUFFIX") ;;
                 *) continue ;;
               esac
-              label=${h%."$SUFFIX"}
-              [ "$label" = "$DASHBOARD_LABEL" ] || printf '%s' "$label" | grep -Eqx '[a-z]{20}' || continue
-              echo "          - main: $h"
+              label=$${h%."$$SUFFIX"}
+              [ "$$label" = "$$DASHBOARD_LABEL" ] || printf '%s' "$$label" | grep -Eqx '[a-z]{20}' || continue
+              echo "          - main: $$h"
             done
             echo "  services:"
-            echo "    $NAME:"
+            echo "    $$NAME:"
             echo "      loadBalancer:"
             echo "        servers:"
-            echo "          - url: $KONG_URL"
-          } > "$tmp"
-          if [ -f "$OUT" ] && cmp -s "$tmp" "$OUT"; then
-            rm -f "$tmp"
+            echo "          - url: $$KONG_URL"
+          } > "$$tmp"
+          if [ -f "$$OUT" ] && cmp -s "$$tmp" "$$OUT"; then
+            rm -f "$$tmp"
           else
-            chmod 644 "$tmp"
-            mv "$tmp" "$OUT"
+            chmod 644 "$$tmp"
+            mv "$$tmp" "$$OUT"
           fi
+          )
+          sleep 15
+        done
