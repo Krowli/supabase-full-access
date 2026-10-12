@@ -1,6 +1,7 @@
 import type { Coolify } from './coolify.ts'
 import type { Gateway } from './kong.ts'
 import type { ObjectStorage } from './minio.ts'
+import type { ProjectDirs } from './project-dirs.ts'
 import type { Project, Registry } from './registry.ts'
 import { generateProjectSecrets, generateRef, type ProjectSecrets } from './secrets.ts'
 import type { TenantRegistry } from './tenants.ts'
@@ -17,6 +18,8 @@ export type ProvisionerDeps = {
   pooler: TenantRegistry
   realtime: TenantRegistry
   gateway: Gateway
+  /** The host directories Studio writes the project's GoTrue and storage settings into. */
+  projectDirs: ProjectDirs
   healthTimeoutMs: number
   pollIntervalMs: number
   log?: (event: string, fields: Record<string, unknown>) => void
@@ -39,14 +42,15 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
  * restart) is finished by running provision() again. `step` in the registry names the step
  * that ran last; with FAILED it is the one that failed.
  *
- *   CREATING:   coolify_service (find or create by name = ref, so a crash between Coolify's
+ *   CREATING:   config_dirs (the host directories the stack binds, before anything can start
+ *               it), coolify_service (find or create by name = ref, so a crash between Coolify's
  *               response and saving the uuid cannot make a duplicate), network (join `coolify`),
  *               storage (MinIO bucket <ref> and its scoped key), envs.
  *   COMING_UP:  start (unless already up), health (poll Coolify until running:healthy),
  *               pooler (Supavisor tenant), realtime (Realtime tenant), gateway (Kong config).
  *   ACTIVE_HEALTHY, or FAILED with step and last_error.
  *
- * Delete runs the same in reverse under DELETING and stays DELETING with last_error until a
+ * Delete runs the same in reverse under DELETING, the config directories last, and stays DELETING with last_error until a
  * repeated delete gets through.
  *
  * One instance per registry: runs are serialised per ref in this process only.
@@ -108,6 +112,7 @@ export class Provisioner {
       const secrets = await registry.getSecrets(ref)
       if (!secrets) throw new Error(`Secrets for ${ref} are missing`)
 
+      await step('config_dirs', () => this.deps.projectDirs.ensure(ref))
       const uuid = await step('coolify_service', () => this.ensureService(project))
       await step('network', () => coolify.connectToDockerNetwork(uuid))
       await step('storage', () =>
@@ -190,7 +195,8 @@ export class Provisioner {
 
   /**
    * Removes the project from Kong, Realtime and Supavisor, deletes the Coolify service (with
-   * volumes, networks and configuration), the MinIO bucket and key, then the registry rows.
+   * volumes, networks and configuration), the MinIO bucket and key, the settings directories
+   * Studio wrote, then the registry rows.
    * Coolify removes the containers asynchronously after it accepts the request. A failure
    * leaves DELETING with step and last_error; calling delete again continues.
    */
@@ -236,6 +242,7 @@ export class Provisioner {
       if (secrets) {
         await step('storage', () => this.deps.storage.removeBucket(ref, secrets.s3_access_key))
       }
+      await step('config_dirs', () => this.deps.projectDirs.remove(ref))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       this.log('project.delete_failed', { ref, step: current, error: message })

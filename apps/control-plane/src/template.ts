@@ -18,6 +18,8 @@ export type TemplateValues = {
   S3_ENDPOINT: string
   S3_REGION: string
   IMGPROXY_URL: string
+  /** The host directory with each project's settings files (src/project-dirs.ts). */
+  PROJECTS_HOST_DIR: string
 }
 
 // Values land in list-style compose lines (`- KEY=value`), so only characters that cannot
@@ -43,7 +45,8 @@ export function renderTemplate(template: string, values: TemplateValues): string
 export function templateValues(
   ref: string,
   domainSuffix: string,
-  shared: SharedEndpoints
+  shared: SharedEndpoints,
+  projectsHostDir: string
 ): TemplateValues {
   return {
     REF: ref,
@@ -52,6 +55,7 @@ export function templateValues(
     S3_ENDPOINT: shared.s3Endpoint,
     S3_REGION: shared.s3Region,
     IMGPROXY_URL: shared.imgproxyUrl,
+    PROJECTS_HOST_DIR: projectsHostDir,
   }
 }
 

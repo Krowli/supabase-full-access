@@ -4,6 +4,7 @@ import { loadConfig } from './config.ts'
 import { createCoolifyClient } from './coolify.ts'
 import { KongGateway, dashboardHost, renderKongConfig, type GatewayProject } from './kong.ts'
 import { createMinioStorage } from './minio.ts'
+import { createProjectDirs } from './project-dirs.ts'
 import { Provisioner, routedProjects } from './provisioner.ts'
 import { createPgRegistry, migrate } from './registry.ts'
 import { createApp } from './server.ts'
@@ -49,9 +50,13 @@ const provisioner = new Provisioner({
   registry,
   coolify: createCoolifyClient(config.coolify),
   renderCompose: (ref) =>
-    renderTemplate(template, templateValues(ref, config.domainSuffix, config.projectShared)),
+    renderTemplate(
+      template,
+      templateValues(ref, config.domainSuffix, config.projectShared, config.projectsHostDir)
+    ),
   serviceEnvs,
   storage: createMinioStorage(config.minio),
+  projectDirs: createProjectDirs(config.projectsHostDir),
   pooler: createSupavisorTenants({ url: config.supavisorUrl, ...admin }),
   realtime: createRealtimeTenants({ url: config.realtimeUrl, ...admin }),
   gateway,

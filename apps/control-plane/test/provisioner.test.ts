@@ -72,6 +72,18 @@ describe('create', () => {
     expect(shared.gateway.routed).toEqual([p.ref])
   })
 
+  it('creates the settings directories before the service exists', async () => {
+    const create = coolify.createService.bind(coolify)
+    let dirsAtCreate: string[] = []
+    coolify.createService = async (...args) => {
+      dirsAtCreate = [...shared.projectDirs.dirs]
+      return create(...args)
+    }
+    const p = await createAndWait()
+    expect(dirsAtCreate).toEqual([p.ref])
+    expect([...shared.projectDirs.dirs]).toEqual([p.ref])
+  })
+
   it('ends FAILED with last_error when the stack never becomes healthy', async () => {
     coolify.neverHealthy = true
     provisioner = new Provisioner({
@@ -101,6 +113,7 @@ describe('create', () => {
 describe('resuming after a failure', () => {
   it.each([
     ['storage', 'storage'],
+    ['projectDirs', 'config_dirs'],
     ['pooler', 'pooler'],
     ['realtime', 'realtime'],
     ['gateway', 'gateway'],
@@ -212,6 +225,17 @@ describe('delete', () => {
     expect([...shared.pooler.tenants.keys()]).toEqual([other.ref])
     expect([...shared.realtime.tenants.keys()]).toEqual([other.ref])
     expect([...shared.storage.buckets.keys()]).toEqual([other.ref])
+    expect([...shared.projectDirs.dirs]).toEqual([other.ref])
+  })
+
+  it('a failure removing the settings directories leaves DELETING, and deleting again finishes', async () => {
+    const p = await createAndWait()
+    shared.projectDirs.failNext = true
+    await expect(provisioner.delete(p.ref)).rejects.toThrow(/simulated failure in dirs remove/)
+    expect(await registry.get(p.ref)).toMatchObject({ status: 'DELETING', step: 'config_dirs' })
+    await provisioner.delete(p.ref)
+    expect(await registry.get(p.ref)).toBeNull()
+    expect(shared.projectDirs.dirs.size).toBe(0)
   })
 
   it('a failure part-way leaves DELETING with the step, and deleting again finishes', async () => {

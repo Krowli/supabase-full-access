@@ -2,8 +2,8 @@
 # apps/control-plane renders this file per project and creates it as a Coolify service.
 #
 # Two kinds of variables:
-# - {{...}} placeholders are replaced by the control plane before upload (ref, URL, and the
-#   shared MinIO and imgproxy addresses). Values are plain, non-secret strings.
+# - {{...}} placeholders are replaced by the control plane before upload (ref, URL, the
+#   shared MinIO and imgproxy addresses, and PROJECTS_HOST_DIR). Values are plain, non-secret strings.
 # - ${...} references are Coolify service env vars. The control plane sets the secrets this
 #   way, so they never appear in the compose text Coolify stores: PROJECT_DB_PASSWORD,
 #   PROJECT_JWT_SECRET, PROJECT_ANON_KEY, PROJECT_SERVICE_KEY, S3_ACCESS_KEY, S3_SECRET_KEY.
@@ -303,9 +303,11 @@ services:
       - auth
       - '--config-dir'
       - /etc/gotrue
-    # M3 replaces this volume with the bind /data/pieowl/projects/<ref>/gotrue that Studio writes.
+    # Studio writes 99_studio.env into <PROJECTS_HOST_DIR>/<ref>/gotrue (its /data/pieowl/projects/<ref>/gotrue);
+    # GoTrue watches the directory and reloads within ~6 s (FORK.md, "How it works"). The control
+    # plane creates the directory before the first start (apps/control-plane/src/project-dirs.ts).
     volumes:
-      - 'gotrue-config:/etc/gotrue:ro'
+      - '{{PROJECTS_HOST_DIR}}/{{REF}}/gotrue:/etc/gotrue:ro'
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -400,10 +402,9 @@ services:
       - 'PGRST_JWT_SECRET=${PROJECT_JWT_SECRET}'
       - 'STORAGE_PUBLIC_URL={{PUBLIC_URL}}'
     volumes:
-      # M3 replaces this volume with the bind /data/pieowl/projects/<ref>/storage that Studio writes.
-      - 'storage-config:/etc/studio-config:ro'
+      # Studio writes storage.env into <PROJECTS_HOST_DIR>/<ref>/storage; storage-api reads it only at
+      # start (the command above), so a save applies on the next restart of this container.
+      - '{{PROJECTS_HOST_DIR}}/{{REF}}/storage:/etc/studio-config:ro'
 volumes:
   supabase-db-data:
   supabase-db-config:
-  gotrue-config:
-  storage-config:
