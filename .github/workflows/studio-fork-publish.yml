@@ -59,7 +59,7 @@ jobs:
           tags: |
             type=sha,prefix=${{ inputs.multi_project && 'platform-' || '' }}{{date 'YYYY.MM.DD'}}-sha-
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && !inputs.multi_project }}
-            type=raw,value=platform,enable=${{ github.ref == 'refs/heads/main' && inputs.multi_project }}
+            type=raw,value=platform,enable=${{ github.ref == 'refs/heads/main' && inputs.multi_project == true }}
             type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' }}
 
       # apps/studio/Dockerfile declares one ARG, STUDIO_FRAMEWORK, and defaults
