@@ -1,13 +1,13 @@
 import { resolve } from 'node:path'
 
-import type { CoolifyConfig } from './coolify.ts'
+import type { CoolifyTargetConfig } from './coolify.ts'
 import type { DashboardOptions } from './kong.ts'
 import { parseSecretsKey } from './secrets.ts'
 import type { SharedEndpoints } from './template.ts'
 
 export type Config = {
   port: number
-  coolify: CoolifyConfig
+  coolify: CoolifyTargetConfig
   registryDatabaseUrl: string
   secretsKey: Buffer
   apiToken: string
@@ -41,12 +41,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     return value ?? ''
   }
 
-  const coolify: CoolifyConfig = {
+  // Project and server: explicit, or taken from the platform's own Coolify application
+  // (resolveCoolifyTarget in src/coolify.ts).
+  const coolify: CoolifyTargetConfig = {
     url: req('COOLIFY_URL'),
     token: req('COOLIFY_TOKEN'),
-    projectUuid: req('COOLIFY_PROJECT_UUID'),
-    environment: req('COOLIFY_ENVIRONMENT'),
-    serverUuid: req('COOLIFY_SERVER_UUID'),
+    projectUuid: env.COOLIFY_PROJECT_UUID || undefined,
+    serverUuid: env.COOLIFY_SERVER_UUID || undefined,
+    resourceUuid: env.COOLIFY_RESOURCE_UUID || undefined,
+    environment: env.COOLIFY_ENVIRONMENT || 'projects',
   }
   const config = {
     port: Number(env.PORT ?? 8080),

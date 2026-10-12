@@ -1,7 +1,7 @@
 import pg from 'pg'
 
 import { loadConfig } from './config.ts'
-import { createCoolifyClient } from './coolify.ts'
+import { createCoolifyClient, resolveCoolifyTarget } from './coolify.ts'
 import { KongGateway, dashboardHost, renderKongConfig, type GatewayProject } from './kong.ts'
 import { createMinioStorage } from './minio.ts'
 import { createProjectDirs } from './project-dirs.ts'
@@ -14,6 +14,13 @@ import { createRealtimeTenants, createSupavisorTenants } from './tenants.ts'
 const config = loadConfig()
 const log = (event: string, fields: Record<string, unknown>) =>
   console.log(JSON.stringify({ time: new Date().toISOString(), event, ...fields }))
+
+const coolifyTarget = await resolveCoolifyTarget(config.coolify)
+log('coolify.target', {
+  project: coolifyTarget.projectUuid,
+  server: coolifyTarget.serverUuid,
+  environment: coolifyTarget.environment,
+})
 
 const pool = new pg.Pool({ connectionString: config.registryDatabaseUrl, max: 5 })
 await migrate(pool)
@@ -48,7 +55,7 @@ const template = loadTemplate(config.templatePath)
 const admin = { adminJwtSecret: config.adminJwtSecret }
 const provisioner = new Provisioner({
   registry,
-  coolify: createCoolifyClient(config.coolify),
+  coolify: createCoolifyClient(coolifyTarget),
   renderCompose: (ref) =>
     renderTemplate(
       template,

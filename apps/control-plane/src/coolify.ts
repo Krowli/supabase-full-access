@@ -27,6 +27,17 @@ export type CoolifyConfig = {
   serverUuid: string
 }
 
+/**
+ * How the control plane finds its Coolify target. Installed as a Coolify application, it knows its
+ * own uuid (COOLIFY_RESOURCE_UUID, which Coolify sets in every container of the stack) and takes the
+ * project and server from that application; explicit uuids win.
+ */
+export type CoolifyTargetConfig = Omit<CoolifyConfig, 'projectUuid' | 'serverUuid'> & {
+  projectUuid?: string
+  serverUuid?: string
+  resourceUuid?: string
+}
+
 export class CoolifyError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -35,11 +46,44 @@ export class CoolifyError extends Error {
   }
 }
 
-export function createCoolifyClient(config: CoolifyConfig): Coolify {
+/**
+ * The project and server for project stacks, and the project environment they go into, created
+ * here when it is missing (Coolify answers 409 when it exists).
+ */
+export async function resolveCoolifyTarget(config: CoolifyTargetConfig): Promise<CoolifyConfig> {
+  const { resourceUuid, ...rest } = config
+  const call = createCall(config)
+  let { projectUuid, serverUuid } = config
+  if (!projectUuid || !serverUuid) {
+    if (!resourceUuid) {
+      throw new Error('Set COOLIFY_PROJECT_UUID and COOLIFY_SERVER_UUID, or run as a Coolify application')
+    }
+    const app = await call<{
+      environment?: { project?: { uuid?: string } }
+      destination?: { server?: { uuid?: string } }
+    }>('GET', `/applications/${encodeURIComponent(resourceUuid)}`)
+    if (!app) throw new CoolifyError(`Coolify has no application ${resourceUuid}`, 404)
+    projectUuid ||= app.environment?.project?.uuid
+    serverUuid ||= app.destination?.server?.uuid
+    if (!projectUuid || !serverUuid) {
+      throw new CoolifyError(`Coolify application ${resourceUuid} has no project or server`, 0)
+    }
+  }
+  try {
+    await call('POST', `/projects/${encodeURIComponent(projectUuid)}/environments`, {
+      name: config.environment,
+    })
+  } catch (err) {
+    if (!(err instanceof CoolifyError && err.status === 409)) throw err
+  }
+  return { ...rest, projectUuid, serverUuid }
+}
+
+function createCall(config: Pick<CoolifyConfig, 'url' | 'token'>) {
   const base = config.url.replace(/\/+$/, '')
 
   // Response bodies are never logged on success: env endpoints echo the values back.
-  async function call<T>(method: string, path: string, body?: unknown): Promise<T | null> {
+  return async function call<T>(method: string, path: string, body?: unknown): Promise<T | null> {
     const res = await fetch(`${base}${path}`, {
       method,
       headers: {
@@ -61,7 +105,10 @@ export function createCoolifyClient(config: CoolifyConfig): Coolify {
     const text = await res.text()
     return (text ? JSON.parse(text) : null) as T
   }
+}
 
+export function createCoolifyClient(config: CoolifyConfig): Coolify {
+  const call = createCall(config)
   const svc = (uuid: string) => `/services/${encodeURIComponent(uuid)}`
 
   return {
