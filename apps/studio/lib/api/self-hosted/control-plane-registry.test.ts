@@ -64,6 +64,7 @@ describe('fetchControlPlaneProjects', () => {
     ['COMING_UP', 'COMING_UP'],
     ['ACTIVE_HEALTHY', 'ACTIVE_HEALTHY'],
     ['FAILED', 'INIT_FAILED'],
+    ['DELETING', 'GOING_DOWN'],
     ['SOMETHING_NEW', 'UNKNOWN'],
   ])('reports %s as %s', async (status, expected) => {
     serve([project('bbbbbbbbbbbbbbbbbbbb', { status })])
@@ -79,6 +80,24 @@ describe('fetchControlPlaneProjects', () => {
       SUPABASE_URL: 'https://cccccccccccccccccccc.pieowl.test',
       SUPABASE_PUBLIC_URL: 'https://cccccccccccccccccccc.pieowl.test',
     })
+  })
+
+  it('asks for no secrets of a project being deleted, whose secrets go with it', async () => {
+    serve(
+      [project('ffffffffffffffffffff', { status: 'DELETING' }), project('gggggggggggggggggggg')],
+      (ref) =>
+        ref === 'ffffffffffffffffffff'
+          ? HttpResponse.json({ error: 'Project not found' }, { status: 404 })
+          : HttpResponse.json(SECRETS)
+    )
+
+    const [deleting, other] = await fetchControlPlaneProjects(CONFIG)
+    expect(deleting.status).toBe('GOING_DOWN')
+    expect(deleting.env).toEqual({
+      SUPABASE_URL: 'https://ffffffffffffffffffff.pieowl.test',
+      SUPABASE_PUBLIC_URL: 'https://ffffffffffffffffffff.pieowl.test',
+    })
+    expect(other.env.POSTGRES_HOST).toBe('supabase-db-uuidgggg')
   })
 
   it('fails as a whole when one project secrets cannot be read', async () => {

@@ -81,6 +81,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'project-switcher-'))
   vi.stubEnv('STUDIO_PROJECT_REGISTRY', undefined)
   vi.stubEnv('STUDIO_PROJECT_REGISTRY_URL', undefined)
+  vi.stubEnv('STUDIO_DEFAULT_PROJECT', undefined)
 })
 
 afterEach(() => {
@@ -293,6 +294,35 @@ describe('with the control plane as the registry', () => {
     expect(res._getStatusCode()).toBe(500)
     expect(res._getJSONData()).toEqual({
       error: { message: `Project ${REF} is not ready (COMING_UP): it has no POSTGRES_HOST yet` },
+    })
+  })
+
+  describe('on a platform stack, where no stack backs default (STUDIO_DEFAULT_PROJECT=none)', () => {
+    beforeEach(() => {
+      vi.stubEnv('STUDIO_DEFAULT_PROJECT', 'none')
+    })
+
+    it('leaves default out of every list', async () => {
+      expect(refs((await call(projectsHandler))._getJSONData())).toEqual([REF])
+      const { projects } = (
+        await call(orgProjectsHandler, { query: { slug: 'default-org-slug' } })
+      )._getJSONData()
+      expect(refs(projects)).toEqual([REF])
+      const profile = (await call(profileHandler))._getJSONData()
+      expect(refs(profile.organizations[0].projects)).toEqual([REF])
+    })
+
+    it('still answers the detail of default, as REMOVED and without an endpoint', async () => {
+      const res = await call(projectHandler, { query: { ref: 'default' } })
+      expect(res._getStatusCode()).toBe(200)
+      expect(res._getJSONData()).toMatchObject({ ref: 'default', status: 'REMOVED', restUrl: '' })
+    })
+
+    it("refuses default's database instead of using the container's", async () => {
+      vi.stubEnv('POSTGRES_HOST', 'db')
+      const res = await call(settingsHandler, { query: { ref: 'default' } })
+      expect(res._getStatusCode()).toBe(500)
+      expect(res._getJSONData().error.message).toMatch(/default has no stack here/)
     })
   })
 })

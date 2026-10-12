@@ -1,6 +1,11 @@
 import type { NextApiRequest } from 'next'
 
-import { DEFAULT_PROJECT_REF, listProjects, type ResolvedProject } from './project-context'
+import {
+  DEFAULT_PROJECT_REF,
+  hasDefaultStack,
+  listProjects,
+  type ResolvedProject,
+} from './project-context'
 import { DEFAULT_PROJECT } from '@/lib/constants/api'
 
 /**
@@ -30,9 +35,14 @@ function toPlatformProject(project: ResolvedProject, index: number): PlatformPro
   }
 }
 
-/** Every project, `default` first. */
+/**
+ * Every project, `default` first. Without a stack behind it (`STUDIO_DEFAULT_PROJECT=none`)
+ * `default` is not a project anyone can open, so the lists and the switcher leave it out.
+ */
 export async function platformProjects(): Promise<PlatformProject[]> {
-  return (await listProjects()).map(toPlatformProject)
+  return (await listProjects())
+    .map(toPlatformProject)
+    .filter((project) => hasDefaultStack() || project.ref !== DEFAULT_PROJECT_REF)
 }
 
 const queryString = (value: string | string[] | undefined) =>

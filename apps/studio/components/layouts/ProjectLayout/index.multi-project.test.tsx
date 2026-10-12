@@ -322,6 +322,22 @@ describe('ProjectLayout with the multi-project flag', () => {
     expect(screen.queryByTestId('provisioning-state')).not.toBeInTheDocument()
   })
 
+  it.each([HOME, EDITOR, SETTINGS])(
+    'sends default without a stack (REMOVED) to the project list from %s',
+    (pathname) => {
+      renderPage(pathname, 'REMOVED')
+
+      expect(mockRouter.replace).toHaveBeenCalledWith('/org/default-org-slug')
+      expect(screen.queryByTestId('page')).not.toBeInTheDocument()
+    }
+  )
+
+  it('shows a project being deleted on its database pages', () => {
+    renderPage(EDITOR, 'GOING_DOWN')
+
+    expect(screen.getByTestId('provisioning-state')).toHaveTextContent('GOING_DOWN')
+  })
+
   it('shows the page once the project is running', () => {
     renderPage(HOME, 'ACTIVE_HEALTHY')
 
@@ -340,5 +356,11 @@ describe('ProjectLayout without the flag', () => {
 
     expect(screen.getByTestId('page')).toBeInTheDocument()
     expect(screen.queryByTestId('provisioning-state')).not.toBeInTheDocument()
+  })
+
+  it('leaves a REMOVED default where upstream puts it', () => {
+    renderPage(HOME, 'REMOVED')
+
+    expect(mockRouter.replace).not.toHaveBeenCalledWith('/org/default-org-slug')
   })
 })

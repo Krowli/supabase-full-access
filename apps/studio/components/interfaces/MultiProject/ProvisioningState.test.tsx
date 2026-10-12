@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { isProvisioning, ProvisioningState } from './ProvisioningState'
+import { isProvisioning, isStacklessDefault, ProvisioningState } from './ProvisioningState'
 import { projectKeys } from '@/data/projects/keys'
 import { API_URL } from '@/lib/constants'
 import { customRender } from '@/tests/lib/custom-render'
@@ -50,8 +50,18 @@ beforeEach(() => {
 
 describe('isProvisioning', () => {
   it('holds for the statuses of a project being set up or failed to', () => {
-    expect(['COMING_UP', 'UNKNOWN', 'INIT_FAILED'].every(isProvisioning)).toBe(true)
+    expect(['COMING_UP', 'UNKNOWN', 'INIT_FAILED', 'GOING_DOWN'].every(isProvisioning)).toBe(true)
     expect(['ACTIVE_HEALTHY', 'INACTIVE', 'RESTARTING', undefined].some(isProvisioning)).toBe(false)
+  })
+})
+
+describe('isStacklessDefault', () => {
+  it('holds only for default reported as REMOVED (no stack behind it)', () => {
+    expect(isStacklessDefault({ ref: 'default', status: 'REMOVED' })).toBe(true)
+    expect(isStacklessDefault({ ref: 'default', status: 'ACTIVE_HEALTHY' })).toBe(false)
+    expect(isStacklessDefault({ ref: 'default', status: 'INACTIVE' })).toBe(false)
+    expect(isStacklessDefault({ ref: REF, status: 'REMOVED' })).toBe(false)
+    expect(isStacklessDefault(undefined)).toBe(false)
   })
 })
 
@@ -99,6 +109,24 @@ describe('ProvisioningState', () => {
       target: { value: 'Shop' },
     })
     fireEvent.click(confirm)
+
+    await waitFor(() => expect(routerMock.asPath).toBe('/project/default'))
+    expect(calls).toEqual([{ method: 'DELETE', path: `/platform/projects/${REF}` }])
+  })
+
+  it('shows a project being deleted, and deletes again through the local route', async () => {
+    project.current = { ref: REF, name: 'Shop', status: 'GOING_DOWN' }
+    customRender(<ProvisioningState status="GOING_DOWN" />)
+
+    expect(screen.getByText('Shop is being deleted')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('building-state')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete again' }))
+    fireEvent.change(await screen.findByPlaceholderText('Type the project name in here'), {
+      target: { value: 'Shop' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'I understand, delete this project' }))
 
     await waitFor(() => expect(routerMock.asPath).toBe('/project/default'))
     expect(calls).toEqual([{ method: 'DELETE', path: `/platform/projects/${REF}` }])

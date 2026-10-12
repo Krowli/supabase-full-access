@@ -32,6 +32,10 @@ import { fetchControlPlaneProjects, type ControlPlaneConfig } from './control-pl
  *   (`DERIVED_ENV`), or are left unset so the reader's own default applies. A project that is
  *   missing its database host must fail, not quietly open `default`'s database.
  * - An unknown ref is a 404, and a reader called outside any request for a project throws.
+ * - `STUDIO_DEFAULT_PROJECT=none` (a platform stack, which has no single-project stack): `default`
+ *   gets nothing from the container environment either, so every backend read for it fails. It is
+ *   left out of the project lists and reports `STACKLESS_DEFAULT_STATUS`; the dashboard sends it to
+ *   the project list (deploy/platform/SPEC.md §15).
  *
  * Instead of the file, `STUDIO_PROJECT_REGISTRY_URL` (with `STUDIO_PROJECT_REGISTRY_TOKEN` and
  * `STUDIO_PROJECT_DOMAIN_SUFFIX`) points at the control plane, which `control-plane-registry.ts`
@@ -51,6 +55,18 @@ const DEFAULT_PROJECTS_DIR = '/data/pieowl/projects'
 
 /** What the dashboard shows for a project that is running. */
 const ACTIVE_HEALTHY = 'ACTIVE_HEALTHY'
+
+/**
+ * `default`'s status when no stack backs it: a platform status no layout draws a screen for
+ * (`INACTIVE` would be upstream's paused screen). `ProjectLayout` reads it as "go to the project
+ * list".
+ */
+export const STACKLESS_DEFAULT_STATUS = 'REMOVED'
+
+/** False on a platform stack (`STUDIO_DEFAULT_PROJECT=none`): `default` has no database or keys. */
+export function hasDefaultStack(): boolean {
+  return process.env.STUDIO_DEFAULT_PROJECT !== 'none'
+}
 
 /** The environment names whose value belongs to one project. Every other name Studio reads is shared. */
 export const PROJECT_ENV_NAMES = [
@@ -193,7 +209,7 @@ export function isMultiProject(): boolean {
 
 const defaultProject = (projectsDir: string): ResolvedProject => ({
   ref: DEFAULT_PROJECT_REF,
-  status: ACTIVE_HEALTHY,
+  status: hasDefaultStack() ? ACTIVE_HEALTHY : STACKLESS_DEFAULT_STATUS,
   env: {},
   projectsDir,
 })
@@ -352,7 +368,8 @@ async function findProject(ref: string): Promise<ResolvedProject> {
 
 /**
  * Every project Studio serves, `default` first and the rest in registry order. Without a registry
- * that is `default` alone.
+ * that is `default` alone. `default` is listed even without a stack; the lists leave it out
+ * (`project-list.ts`).
  */
 export async function listProjects(): Promise<ResolvedProject[]> {
   if (!isMultiProject()) return [defaultProject(DEFAULT_PROJECTS_DIR)]
@@ -444,12 +461,15 @@ export function projectEnv(name: ProjectEnvName): string | undefined {
   if (!isMultiProject()) return process.env[name]
 
   const project = currentProject()
-  if (project.ref === DEFAULT_PROJECT_REF) return project.env[name] ?? process.env[name]
+  const isDefault = project.ref === DEFAULT_PROJECT_REF
+  if (isDefault && hasDefaultStack()) return project.env[name] ?? process.env[name]
 
   const value = project.env[name] ?? DERIVED_ENV[name]?.(project.ref, project.projectsDir)
   if (value === undefined && isRequiredEnv(name)) {
     throw new ProjectContextError(
-      `Project ${project.ref} is not ready (${project.status}): it has no ${name} yet`
+      isDefault
+        ? `Project default has no stack here (STUDIO_DEFAULT_PROJECT=none): open one of the platform's projects`
+        : `Project ${project.ref} is not ready (${project.status}): it has no ${name} yet`
     )
   }
   return value

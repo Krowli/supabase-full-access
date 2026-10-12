@@ -45,6 +45,8 @@ import { UpgradingState } from './UpgradingState'
 import { CreateBranchModal } from '@/components/interfaces/BranchManagement/CreateBranchModal'
 import {
   isProvisioning,
+  isStacklessDefault,
+  PROJECT_LIST_PATH,
   ProvisioningState,
 } from '@/components/interfaces/MultiProject/ProvisioningState'
 import { ProjectAPIDocs } from '@/components/interfaces/ProjectAPIDocs/ProjectAPIDocs'
@@ -498,6 +500,13 @@ const ContentWrapper = ({ children }: ContentWrapperProps) => {
   useEffect(() => {
     if (ref) state.setSelectedDatabaseId(ref)
   }, [ref])
+
+  // Fork: `default` without a stack is the project list (deploy/platform/SPEC.md §15)
+  const isStackless = IS_MULTI_PROJECT && isStacklessDefault(selectedProject)
+  useEffect(() => {
+    if (isStackless) router.replace(PROJECT_LIST_PATH)
+  }, [isStackless, router])
+  if (isStackless) return <LogoLoader />
 
   // Fork: building and failed setup on every database page, home included (deploy/platform/SPEC.md M6)
   if (IS_MULTI_PROJECT && requiresDbConnection && isProvisioning(selectedProject?.status))

@@ -17,19 +17,74 @@ import { PROJECT_STATUS } from '@/lib/constants'
  *   the project once that reads `ACTIVE_HEALTHY`.
  * - `INIT_FAILED`: the control plane stopped at a step. Retry runs the steps again (each is
  *   idempotent); delete removes what was built.
+ * - `GOING_DOWN`: the control plane is deleting it (`DELETING`). A delete that stopped at a step
+ *   stays there; deleting again continues it.
  */
 
 const PROVISIONING_STATUSES: string[] = [
   PROJECT_STATUS.COMING_UP,
   PROJECT_STATUS.UNKNOWN,
   PROJECT_STATUS.INIT_FAILED,
+  PROJECT_STATUS.GOING_DOWN,
 ]
 
 export const isProvisioning = (status: string | undefined) =>
   status !== undefined && PROVISIONING_STATUSES.includes(status)
 
 export const ProvisioningState = ({ status }: { status: string | undefined }) =>
-  status === PROJECT_STATUS.INIT_FAILED ? <ProvisioningFailedState /> : <BuildingState />
+  status === PROJECT_STATUS.INIT_FAILED ? (
+    <ProvisioningFailedState />
+  ) : status === PROJECT_STATUS.GOING_DOWN ? (
+    <ProvisioningDeletingState />
+  ) : (
+    <BuildingState />
+  )
+
+/**
+ * Where a multi-project Studio without a stack behind `default` (`STUDIO_DEFAULT_PROJECT=none`)
+ * sends `/project/default`: upstream's project list of the one organization.
+ */
+export const PROJECT_LIST_PATH = '/org/default-org-slug'
+
+/** `default` as the server reports it when no stack backs it (`project-context.ts`). */
+export const isStacklessDefault = (project: { ref: string; status: string } | undefined) =>
+  project?.ref === 'default' && project.status === PROJECT_STATUS.REMOVED
+
+export const ProvisioningDeletingState = () => {
+  const { data: project } = useSelectedProjectQuery()
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false)
+
+  return (
+    <>
+      <div className="flex items-center justify-center h-full">
+        <div className="bg-surface-100 border border-overlay rounded-md w-3/4 lg:w-1/2">
+          <div className="space-y-6 pt-6">
+            <div className="flex px-8 space-x-8">
+              <div className="mt-1">
+                <CriticalIcon className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <p>{project?.name ?? 'This project'} is being deleted</p>
+                <p className="text-sm text-foreground-light">
+                  Its routes, services, database and storage are being removed. If it stays here, a
+                  step did not finish: deleting again continues from that step. The control plane's
+                  log names it.
+                </p>
+              </div>
+            </div>
+
+            <div className="border-t border-overlay flex items-center justify-end gap-x-2 py-4 px-8">
+              <Button variant="danger" onClick={() => setIsDeleteOpen(true)}>
+                Delete again
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <MultiProjectDeleteDialog visible={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} />
+    </>
+  )
+}
 
 export const ProvisioningFailedState = () => {
   const { data: project } = useSelectedProjectQuery()

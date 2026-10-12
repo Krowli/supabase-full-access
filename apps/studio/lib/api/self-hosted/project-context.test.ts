@@ -58,6 +58,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'project-context-'))
   vi.stubEnv('STUDIO_PROJECT_REGISTRY', undefined)
   vi.stubEnv('STUDIO_PROJECT_REGISTRY_URL', undefined)
+  vi.stubEnv('STUDIO_DEFAULT_PROJECT', undefined)
   vi.stubEnv('PLATFORM_ADMIN_JWT_SECRET', undefined)
   vi.stubEnv('AUTH_JWT_SECRET', 'default-jwt-secret-with-at-least-32-characters')
   vi.stubEnv('POSTGRES_HOST', 'db')
@@ -372,6 +373,20 @@ describe('registry from the control plane', () => {
     ])
   })
 
+  it('gives default nothing from the container on a platform stack (STUDIO_DEFAULT_PROJECT=none)', async () => {
+    vi.stubEnv('STUDIO_DEFAULT_PROJECT', 'none')
+
+    expect((await listProjects())[0]).toMatchObject({ ref: 'default', status: 'REMOVED' })
+    await runWithProject('default', () => {
+      // The container still holds POSTGRES_HOST=db and SUPABASE_URL here; none of it is used.
+      expect(() => projectPostgres()).toThrow(/default has no stack/)
+      expect(() => projectEnv('SUPABASE_URL')).toThrow(/STUDIO_DEFAULT_PROJECT=none/)
+      expect(projectEnv('SUPABASE_PUBLISHABLE_KEY')).toBeUndefined()
+    })
+    // The control plane's projects are untouched.
+    await runWithProject(REF, () => expect(projectPostgres().host).toBe(`supabase-db-${UUID}`))
+  })
+
   it('answers 404 for a ref the control plane does not hold', async () => {
     const { res, handler } = await callWrapped({ ref: 'zzzzzzzzzzzzzzzzzzzz' })
     expect(handler).not.toHaveBeenCalled()
@@ -387,6 +402,16 @@ describe('registry from the control plane', () => {
       expect(projectEnv('SUPABASE_PUBLIC_URL')).toBe(`https://${REF}.example.test`)
       expect(() => projectPostgres()).toThrow(new RegExp(`${REF}.*POSTGRES_HOST`))
       expect(() => projectEnv('SUPABASE_SERVICE_KEY')).toThrow(/not ready/)
+    })
+  })
+
+  it('lists a project being deleted as going down, and refuses its backends', async () => {
+    projects = [project({ status: 'DELETING' })]
+
+    expect((await listProjects())[1]).toMatchObject({ ref: REF, status: 'GOING_DOWN' })
+    expect(calls.map(({ path }) => path)).toEqual(['/projects'])
+    await runWithProject(REF, () => {
+      expect(() => projectPostgres()).toThrow(/not ready \(GOING_DOWN\)/)
     })
   })
 
