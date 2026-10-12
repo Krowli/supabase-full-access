@@ -122,6 +122,14 @@ export class FakeCoolify implements Coolify {
     this.maybeFail('start', 'before')
     this.must(uuid).status = 'starting:unhealthy'
   }
+  async updateCompose(uuid: string, compose: string) {
+    this.calls.push('updateCompose')
+    this.must(uuid).compose = compose
+  }
+  async restart(uuid: string) {
+    this.calls.push('restart')
+    this.must(uuid).status = 'running:healthy'
+  }
   async deleteService(uuid: string) {
     this.calls.push('deleteService')
     this.services.delete(uuid)

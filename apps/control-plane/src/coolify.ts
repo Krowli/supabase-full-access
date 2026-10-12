@@ -15,6 +15,9 @@ export interface Coolify {
   connectToDockerNetwork(uuid: string): Promise<void>
   setEnvs(uuid: string, envs: Record<string, string>): Promise<void>
   start(uuid: string): Promise<void>
+  /** Replaces the service's compose; takes effect on the next start or restart. */
+  updateCompose(uuid: string, composeRaw: string): Promise<void>
+  restart(uuid: string): Promise<void>
   /** Queues deletion of the service, its volumes, networks and configuration. */
   deleteService(uuid: string): Promise<void>
 }
@@ -161,6 +164,16 @@ export function createCoolifyClient(config: CoolifyConfig): Coolify {
 
     async start(uuid) {
       await call('POST', `${svc(uuid)}/start`)
+    },
+
+    async updateCompose(uuid, composeRaw) {
+      await call('PATCH', svc(uuid), {
+        docker_compose_raw: Buffer.from(composeRaw).toString('base64'),
+      })
+    },
+
+    async restart(uuid) {
+      await call('POST', `${svc(uuid)}/restart`)
     },
 
     async deleteService(uuid) {

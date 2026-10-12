@@ -348,10 +348,27 @@ services:
       - GOTRUE_MAILER_TEMPLATE_MAX_AGE=1m
   supabase-storage:
     image: 'supabase/storage-api:v1.44.2'
+    # storage-api reads its settings only when it starts, so this loop restarts it (inside the
+    # container, a few seconds) whenever Studio rewrites storage.env: a save applies by itself.
+    # If storage-api dies on its own, the container exits with its code and Docker restarts it.
     command:
       - sh
       - '-c'
-      - 'set -a; [ -f /etc/studio-config/storage.env ] && . /etc/studio-config/storage.env; set +a; exec node dist/start/server.js'
+      - |
+        f=/etc/studio-config/storage.env
+        flag=/tmp/storage-env-changed
+        sum() { cksum "$$f" 2>/dev/null || echo none; }
+        trap 'kill -TERM "$$pid" "$$watch" 2>/dev/null; wait "$$pid"; exit 0' TERM INT
+        while :; do
+          rm -f "$$flag"
+          last=$$(sum)
+          (set -a; [ -f "$$f" ] && . "$$f"; set +a; exec node dist/start/server.js) & pid=$$!
+          (while sleep 5; do [ "$$(sum)" = "$$last" ] || { touch "$$flag"; kill -TERM "$$pid"; exit 0; }; done) & watch=$$!
+          wait "$$pid"; code=$$?
+          [ -f "$$flag" ] && continue
+          kill "$$watch" 2>/dev/null
+          exit "$$code"
+        done
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -402,8 +419,8 @@ services:
       - 'PGRST_JWT_SECRET=${PROJECT_JWT_SECRET}'
       - 'STORAGE_PUBLIC_URL={{PUBLIC_URL}}'
     volumes:
-      # Studio writes storage.env into <PROJECTS_HOST_DIR>/<ref>/storage; storage-api reads it only at
-      # start (the command above), so a save applies on the next restart of this container.
+      # Studio writes storage.env into <PROJECTS_HOST_DIR>/<ref>/storage; the command above restarts
+      # storage-api when it changes. A directory mount, so a rewritten file is seen at once.
       - '{{PROJECTS_HOST_DIR}}/{{REF}}/storage:/etc/studio-config:ro'
 volumes:
   supabase-db-data:

@@ -278,3 +278,27 @@ describe('delete', () => {
     await done
   })
 })
+
+describe('updateStack', () => {
+  it('puts the current template into the project service and restarts it', async () => {
+    const p = await createAndWait()
+    const svc = coolify.services.get(p.coolify_service_uuid!)!
+    svc.compose = 'an older template'
+    coolify.calls = []
+
+    await provisioner.updateStack(p.ref)
+
+    expect(svc.compose).toBe(`compose for ${p.ref}`)
+    expect(coolify.calls).toEqual(['getService', 'updateCompose', 'restart'])
+    expect((await registry.get(p.ref))!.status).toBe('ACTIVE_HEALTHY')
+  })
+
+  it('refuses a project that is not ACTIVE_HEALTHY, and 404s an unknown ref', async () => {
+    const failed = await createAndWait()
+    await registry.update(failed.ref, { status: 'FAILED' })
+    await expect(provisioner.updateStack(failed.ref)).rejects.toBeInstanceOf(ConflictError)
+    await expect(provisioner.updateStack('abcdefghijklmnopqrst')).rejects.toBeInstanceOf(
+      NotFoundError
+    )
+  })
+})
