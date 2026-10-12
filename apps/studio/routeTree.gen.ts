@@ -235,6 +235,7 @@ import { Route as ApiPlatformPgMetaRefViewsRouteImport } from './routes/api/plat
 import { Route as ApiPlatformProjectsRefIndexRouteImport } from './routes/api/platform/projects/$ref/index'
 import { Route as ApiPlatformProjectsRefDatabasesRouteImport } from './routes/api/platform/projects/$ref/databases'
 import { Route as ApiPlatformProjectsRefInfraMonitoringRouteImport } from './routes/api/platform/projects/$ref/infra-monitoring'
+import { Route as ApiPlatformProjectsRefRetryRouteImport } from './routes/api/platform/projects/$ref/retry'
 import { Route as ApiPlatformProjectsRefRunLintsRouteImport } from './routes/api/platform/projects/$ref/run-lints'
 import { Route as ApiPlatformProjectsRefSettingsRouteImport } from './routes/api/platform/projects/$ref/settings'
 import { Route as ApiPlatformProjectsRefStatusRouteImport } from './routes/api/platform/projects/$ref/status'
@@ -1570,6 +1571,12 @@ const ApiPlatformProjectsRefInfraMonitoringRoute =
     path: '/api/platform/projects/$ref/infra-monitoring',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPlatformProjectsRefRetryRoute =
+  ApiPlatformProjectsRefRetryRouteImport.update({
+    id: '/api/platform/projects/$ref/retry',
+    path: '/api/platform/projects/$ref/retry',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPlatformProjectsRefRunLintsRoute =
   ApiPlatformProjectsRefRunLintsRouteImport.update({
     id: '/api/platform/projects/$ref/run-lints',
@@ -2451,6 +2458,7 @@ export interface FileRoutesByFullPath {
   '/api/platform/pg-meta/$ref/views': typeof ApiPlatformPgMetaRefViewsRoute
   '/api/platform/projects/$ref/databases': typeof ApiPlatformProjectsRefDatabasesRoute
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
+  '/api/platform/projects/$ref/retry': typeof ApiPlatformProjectsRefRetryRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
   '/api/platform/projects/$ref/status': typeof ApiPlatformProjectsRefStatusRoute
@@ -2772,6 +2780,7 @@ export interface FileRoutesByTo {
   '/api/platform/pg-meta/$ref/views': typeof ApiPlatformPgMetaRefViewsRoute
   '/api/platform/projects/$ref/databases': typeof ApiPlatformProjectsRefDatabasesRoute
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
+  '/api/platform/projects/$ref/retry': typeof ApiPlatformProjectsRefRetryRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
   '/api/platform/projects/$ref/status': typeof ApiPlatformProjectsRefStatusRoute
@@ -3111,6 +3120,7 @@ export interface FileRoutesById {
   '/api/platform/pg-meta/$ref/views': typeof ApiPlatformPgMetaRefViewsRoute
   '/api/platform/projects/$ref/databases': typeof ApiPlatformProjectsRefDatabasesRoute
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
+  '/api/platform/projects/$ref/retry': typeof ApiPlatformProjectsRefRetryRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
   '/api/platform/projects/$ref/status': typeof ApiPlatformProjectsRefStatusRoute
@@ -3449,6 +3459,7 @@ export interface FileRouteTypes {
     | '/api/platform/pg-meta/$ref/views'
     | '/api/platform/projects/$ref/databases'
     | '/api/platform/projects/$ref/infra-monitoring'
+    | '/api/platform/projects/$ref/retry'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
     | '/api/platform/projects/$ref/status'
@@ -3770,6 +3781,7 @@ export interface FileRouteTypes {
     | '/api/platform/pg-meta/$ref/views'
     | '/api/platform/projects/$ref/databases'
     | '/api/platform/projects/$ref/infra-monitoring'
+    | '/api/platform/projects/$ref/retry'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
     | '/api/platform/projects/$ref/status'
@@ -4108,6 +4120,7 @@ export interface FileRouteTypes {
     | '/api/platform/pg-meta/$ref/views'
     | '/api/platform/projects/$ref/databases'
     | '/api/platform/projects/$ref/infra-monitoring'
+    | '/api/platform/projects/$ref/retry'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
     | '/api/platform/projects/$ref/status'
@@ -4301,6 +4314,7 @@ export interface RootRouteChildren {
   ApiPlatformPgMetaRefViewsRoute: typeof ApiPlatformPgMetaRefViewsRoute
   ApiPlatformProjectsRefDatabasesRoute: typeof ApiPlatformProjectsRefDatabasesRoute
   ApiPlatformProjectsRefInfraMonitoringRoute: typeof ApiPlatformProjectsRefInfraMonitoringRoute
+  ApiPlatformProjectsRefRetryRoute: typeof ApiPlatformProjectsRefRetryRoute
   ApiPlatformProjectsRefRunLintsRoute: typeof ApiPlatformProjectsRefRunLintsRoute
   ApiPlatformProjectsRefSettingsRoute: typeof ApiPlatformProjectsRefSettingsRoute
   ApiPlatformProjectsRefStatusRoute: typeof ApiPlatformProjectsRefStatusRoute
@@ -5945,6 +5959,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPlatformProjectsRefInfraMonitoringRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/platform/projects/$ref/retry': {
+      id: '/api/platform/projects/$ref/retry'
+      path: '/api/platform/projects/$ref/retry'
+      fullPath: '/api/platform/projects/$ref/retry'
+      preLoaderRoute: typeof ApiPlatformProjectsRefRetryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/platform/projects/$ref/run-lints': {
       id: '/api/platform/projects/$ref/run-lints'
       path: '/api/platform/projects/$ref/run-lints'
@@ -7552,6 +7573,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPlatformProjectsRefDatabasesRoute: ApiPlatformProjectsRefDatabasesRoute,
   ApiPlatformProjectsRefInfraMonitoringRoute:
     ApiPlatformProjectsRefInfraMonitoringRoute,
+  ApiPlatformProjectsRefRetryRoute: ApiPlatformProjectsRefRetryRoute,
   ApiPlatformProjectsRefRunLintsRoute: ApiPlatformProjectsRefRunLintsRoute,
   ApiPlatformProjectsRefSettingsRoute: ApiPlatformProjectsRefSettingsRoute,
   ApiPlatformProjectsRefStatusRoute: ApiPlatformProjectsRefStatusRoute,

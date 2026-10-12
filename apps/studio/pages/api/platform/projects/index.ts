@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next'
 
 import { apiWrapper } from '@/lib/api/apiWrapper'
 import { isMultiProject } from '@/lib/api/self-hosted/project-context'
+import { handleCreateProject } from '@/lib/api/self-hosted/project-lifecycle'
 import { listProjectsResponse, platformProjects } from '@/lib/api/self-hosted/project-list'
 import { DEFAULT_PROJECT } from '@/lib/constants/api'
 
@@ -9,6 +10,8 @@ export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, re
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { method } = req
+  // Fork: create through the control plane (deploy/platform/SPEC.md M6)
+  if (method === 'POST' && isMultiProject()) return handleCreateProject(req, res)
 
   switch (method) {
     case 'GET':

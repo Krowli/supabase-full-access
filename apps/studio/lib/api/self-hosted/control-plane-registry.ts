@@ -45,6 +45,9 @@ const STATUS: Record<string, string> = {
   FAILED: 'INIT_FAILED',
 }
 
+/** A control-plane status as the dashboard knows it. */
+export const platformStatus = (status: string): string => STATUS[status] ?? 'UNKNOWN'
+
 /** How long one call may take. Studio serves the last good registry while the control plane is slow. */
 const REQUEST_TIMEOUT_MS = 5_000
 
@@ -70,41 +73,82 @@ const secretsSchema = z.object({
 })
 
 export class ControlPlaneError extends Error {
-  constructor(message: string) {
+  /** What a Studio route answers with for this failure: the control plane's own 4xx, else 502. */
+  readonly status: number
+
+  constructor(message: string, status = 502) {
     super(message)
     this.name = 'ControlPlaneError'
+    this.status = status
   }
 }
 
-/** One call. A failure names the path and the status, never the token or a response body. */
-async function getJson(config: ControlPlaneConfig, path: string): Promise<unknown> {
+/**
+ * The control plane's refusals that are about the request, not about Studio or the control plane
+ * itself. Their `{ error }` message is meant for the user (a bad name, a project being provisioned),
+ * so a write passes it on with the same status.
+ */
+const REQUEST_ERRORS = new Set([400, 404, 409])
+
+async function errorMessage(response: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await response.json()
+    const error = (body as { error?: unknown } | null)?.error
+    return typeof error === 'string' ? error.slice(0, 200) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** One call. A failure names the method, the path and the status, never the token. */
+async function requestJson(
+  config: ControlPlaneConfig,
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  { body, timeoutMs = REQUEST_TIMEOUT_MS }: { body?: unknown; timeoutMs?: number } = {}
+): Promise<unknown> {
   const url = `${config.url.replace(/\/+$/, '')}${path}`
+  const call = `control plane ${method} ${path}`
   let response: Response
   try {
     response = await fetch(url, {
-      headers: { Authorization: `Bearer ${config.token}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      method,
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        Accept: 'application/json',
+        ...(body !== undefined && { 'Content-Type': 'application/json' }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (error) {
     const reason = error instanceof Error ? error.name : 'error'
-    throw new ControlPlaneError(`control plane GET ${path} failed: ${reason}`)
+    throw new ControlPlaneError(`${call} failed: ${reason}`)
   }
   if (!response.ok) {
-    throw new ControlPlaneError(`control plane GET ${path} answered ${response.status}`)
+    // A read never quotes a body: the registry's answers carry secrets.
+    const message =
+      method !== 'GET' && REQUEST_ERRORS.has(response.status)
+        ? await errorMessage(response)
+        : undefined
+    if (message) throw new ControlPlaneError(message, response.status)
+    throw new ControlPlaneError(`${call} answered ${response.status}`)
   }
   try {
     return await response.json()
   } catch {
-    throw new ControlPlaneError(`control plane GET ${path} did not answer JSON`)
+    throw new ControlPlaneError(`${call} did not answer JSON`)
   }
 }
 
-/** Parses with `schema`, naming the path and the fields at fault but never a value. */
-function parse<T>(schema: z.ZodType<T>, value: unknown, path: string): T {
+const getJson = (config: ControlPlaneConfig, path: string) => requestJson(config, 'GET', path)
+
+/** Parses with `schema`, naming the call and the fields at fault but never a value. */
+function parse<T>(schema: z.ZodType<T>, value: unknown, path: string, method = 'GET'): T {
   const parsed = schema.safeParse(value)
   if (parsed.success) return parsed.data
   const fields = parsed.error.issues.map((issue) => issue.path.join('.') || '(root)')
-  throw new ControlPlaneError(`control plane GET ${path} is invalid at ${fields.join(', ')}`)
+  throw new ControlPlaneError(`control plane ${method} ${path} is invalid at ${fields.join(', ')}`)
 }
 
 /** Every project the control plane holds, in its order (oldest first), with its secrets where it has a stack. */
@@ -137,10 +181,64 @@ export async function fetchControlPlaneProjects(
       return {
         ref: project.ref,
         name: project.name,
-        status: STATUS[project.status] ?? 'UNKNOWN',
+        status: platformStatus(project.status),
         insertedAt: project.created_at,
         env,
       }
     })
   )
+}
+
+/**
+ * Writes (deploy/platform/SPEC.md M6). The control plane answers each with the project's public
+ * view: `ref`, `name`, `status`, `endpoint`, `created_at` and fields Studio does not read, no secrets.
+ */
+const projectViewSchema = z.object({
+  ref: label,
+  name: z.string(),
+  status: z.string(),
+  endpoint: z.string(),
+  created_at: z.string().optional(),
+})
+
+export type ControlPlaneProjectView = z.infer<typeof projectViewSchema>
+
+/** A create only inserts the project and starts provisioning in the background. */
+const WRITE_TIMEOUT_MS = 15_000
+
+/** A delete runs every step before it answers: gateway, tenants, the Coolify service, the bucket. */
+const DELETE_TIMEOUT_MS = 120_000
+
+/** `POST /projects {name}`: registers a project; the control plane generates its secrets. */
+export async function createControlPlaneProject(
+  config: ControlPlaneConfig,
+  name: string
+): Promise<ControlPlaneProjectView> {
+  const body = await requestJson(config, 'POST', '/projects', {
+    body: { name },
+    timeoutMs: WRITE_TIMEOUT_MS,
+  })
+  return parse(projectViewSchema, body, '/projects', 'POST')
+}
+
+/** `POST /projects {ref}`: re-runs provisioning of a project that is not running. */
+export async function retryControlPlaneProject(
+  config: ControlPlaneConfig,
+  ref: string
+): Promise<ControlPlaneProjectView> {
+  const body = await requestJson(config, 'POST', '/projects', {
+    body: { ref },
+    timeoutMs: WRITE_TIMEOUT_MS,
+  })
+  return parse(projectViewSchema, body, '/projects', 'POST')
+}
+
+/** `DELETE /projects/<ref>`: removes the project and everything provisioned for it. */
+export async function deleteControlPlaneProject(
+  config: ControlPlaneConfig,
+  ref: string
+): Promise<void> {
+  await requestJson(config, 'DELETE', `/projects/${encodeURIComponent(ref)}`, {
+    timeoutMs: DELETE_TIMEOUT_MS,
+  })
 }
