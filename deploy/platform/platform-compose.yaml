@@ -284,10 +284,10 @@ services:
         aliases: [supa-platform-control-plane]
 
   studio:
-    # Multi-project Studio (.github/workflows/studio-fork-publish.yml on this branch with
-    # multi_project=true), pinned by digest: a new Studio is a commit here, then Redeploy.
+    # Multi-project Studio (.github/workflows/studio-fork-publish.yml run on main with
+    # multi_project=true, tag `platform`), pinned by digest: a new Studio is a commit here, then Deploy.
     # Every project comes from the control plane (SPEC.md §11-§12).
-    image: 'ghcr.io/krowli/supabase-full-access-studio:platform-control-plane@sha256:a9d0db9a2b7617928345f5934ab768c2563e94d0f1d10206b307cc3e7cf16ad2'
+    image: 'ghcr.io/krowli/supabase-full-access-studio:platform@sha256:ec931868655b0ccebcfc5e94887f305cb57ce687bbade73812148ac4ba88b0a9'
     depends_on:
       control-plane:
         condition: service_started
