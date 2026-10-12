@@ -31,6 +31,8 @@ export type PlatformBackups = {
   configured: boolean
   config_error: string | null
   config_note: string | null
+  /** A deleted project's backups are removed this many days later (null: backups not configured). */
+  deleted_project_retention_days: number | null
   enabled: boolean
   destination: string | null
   schedule: string | null

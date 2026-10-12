@@ -44,6 +44,14 @@ create table if not exists _platform.backup_runs (
   created_at timestamptz not null default now()
 );
 create index if not exists backup_runs_ref_idx on _platform.backup_runs (ref, created_at desc);
+-- Projects that have backups but are gone from the registry: when that was first seen, and when
+-- their backups were removed (deleted_project_retention_days later).
+create table if not exists _platform.backup_deleted_projects (
+  ref text primary key,
+  destination text not null,
+  deleted_at timestamptz not null,
+  removed_at timestamptz
+);
 `
 
 const COLUMNS =
@@ -60,6 +68,13 @@ export interface RunStore {
   list(ref: string, limit: number): Promise<Run[]>
   /** Runs left queued or running by a process that stopped: they will never finish. */
   failInterrupted(): Promise<number>
+  /** Every ref with a backup, and the destination of its last one. */
+  backedUp(): Promise<{ ref: string; destination: string }[]>
+  /** Records that a project with backups is gone; the first time counts. */
+  noticeDeleted(ref: string, destination: string, at: Date): Promise<void>
+  /** Deleted projects whose backups are not removed yet. */
+  deletedPending(): Promise<{ ref: string; destination: string; deleted_at: Date }[]>
+  markRemoved(ref: string, at: Date): Promise<void>
   /** For the schedule and /health: the last scheduled start, the last run and the last success. */
   summary(ref: string): Promise<{
     lastScheduledStart: Date | null
@@ -122,6 +137,34 @@ export function createRunStore(pool: pg.Pool): RunStore {
          where status in ('queued', 'running')`
       )
       return rowCount ?? 0
+    },
+
+    async backedUp() {
+      const { rows } = await pool.query<{ ref: string; destination: string }>(
+        `select distinct on (ref) ref, destination from _platform.backup_runs
+         where kind <> 'restore' and status = 'succeeded' and destination is not null
+         order by ref, created_at desc`
+      )
+      return rows
+    },
+
+    async noticeDeleted(ref, destination, at) {
+      await pool.query(
+        `insert into _platform.backup_deleted_projects (ref, destination, deleted_at) values ($1, $2, $3)
+         on conflict (ref) do nothing`,
+        [ref, destination, at]
+      )
+    },
+
+    async deletedPending() {
+      const { rows } = await pool.query<{ ref: string; destination: string; deleted_at: Date }>(
+        `select ref, destination, deleted_at from _platform.backup_deleted_projects where removed_at is null order by deleted_at`
+      )
+      return rows
+    },
+
+    async markRemoved(ref, at) {
+      await pool.query(`update _platform.backup_deleted_projects set removed_at = $2 where ref = $1`, [ref, at])
     },
 
     async summary(ref) {

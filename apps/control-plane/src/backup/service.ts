@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import type { Project, Registry } from '../registry.ts'
 import { parseBackupConfig, PLATFORM_REPOSITORY, resolvePolicy, type BackupConfig, type Policy } from './config.ts'
-import { backupPlatform, backupProject, listSnapshots, restoreIntoProject, type JobDeps, type ProjectDb, type Snapshot } from './jobs.ts'
+import { backupPlatform, backupProject, listSnapshots, removeRepository, restoreIntoProject, type JobDeps, type ProjectDb, type Snapshot } from './jobs.ts'
 import { healthProblems, isDue } from './schedule.ts'
 import type { Run, RunKind, RunStore } from './state.ts'
 
@@ -43,6 +43,7 @@ export class BackupService {
   private configError: string | null = 'Not loaded yet'
   private configNote: string | undefined
   private snapshots = new Map<string, { at: number; list: Snapshot[] }>()
+  private pruning = false
 
   constructor(deps: ServiceDeps) {
     this.deps = deps
@@ -174,6 +175,43 @@ export class BackupService {
       const { lastScheduledStart } = await this.deps.runs.summary(p.ref)
       if (isDue(now, policy.schedule, lastScheduledStart)) await this.enqueueBackup(p.ref, 'scheduled')
     }
+    await this.pruneDeleted(config, now)
+  }
+
+  /**
+   * The backups of a deleted project stay deleted_project_retention_days (counted from when this
+   * service first sees the project gone), then its repository is removed. A destination no longer
+   * in the configuration is left alone until it is back; a failed removal is retried next tick.
+   */
+  private async pruneDeleted(config: BackupConfig, now: Date): Promise<void> {
+    if (this.pruning) return
+    this.pruning = true
+    try {
+      const { runs, registry } = this.deps
+      const live = new Set((await registry.list()).map((p) => p.ref))
+      for (const { ref, destination } of await runs.backedUp())
+        if (ref !== PLATFORM_REPOSITORY && !live.has(ref)) await runs.noticeDeleted(ref, destination, now)
+
+      const cutoff = now.getTime() - config.deleted_project_retention_days * 24 * 60 * 60 * 1000
+      for (const d of await runs.deletedPending()) {
+        if (d.deleted_at.getTime() > cutoff) continue
+        const target = config.destinations[d.destination]
+        if (!target) continue
+        try {
+          await removeRepository(this.deps.jobs, target, d.ref)
+          await runs.markRemoved(d.ref, now)
+          this.snapshots.delete(d.ref)
+          this.deps.log('backup.deleted_project_removed', { ref: d.ref, destination: d.destination })
+        } catch (err) {
+          this.deps.log('backup.deleted_project_remove_failed', {
+            ref: d.ref,
+            error: String((err as Error).message ?? err).slice(0, 300),
+          })
+        }
+      }
+    } finally {
+      this.pruning = false
+    }
   }
 
   async health(): Promise<string[]> {
@@ -214,7 +252,13 @@ export class BackupService {
     if (!project) throw new HttpError(404, 'Project not found')
     const policy = this.policy(project)
     const runs = await this.deps.runs.list(ref, 20)
-    const base = { configured: Boolean(policy), config_error: this.configError, config_note: this.configNote ?? null, runs }
+    const base = {
+      configured: Boolean(policy),
+      config_error: this.configError,
+      config_note: this.configNote ?? null,
+      deleted_project_retention_days: this.config?.deleted_project_retention_days ?? null,
+      runs,
+    }
     if (!policy) return { ...base, enabled: false, destination: null, schedule: null, keep: null, snapshots: [], snapshots_error: null }
     let snapshots: Snapshot[] = []
     let snapshotsError: string | null = null

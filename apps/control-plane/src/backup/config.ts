@@ -12,6 +12,8 @@
 //     taxroam: { destination?, schedule?, keep?, password?, enabled? }
 //   encryption_key: ...    # each project's backups are encrypted with a password derived from it
 //                          # (derivePassword) unless the project sets its own `password`
+//   deleted_project_retention_days: 30   # a deleted project's backups are removed this long after
+//                                        # its deletion (0: at once)
 //
 // Each project is one restic repository, <bucket>/<prefix>/<ref>; the platform's own database
 // (the project registry) is the repository `_platform`.
@@ -47,6 +49,7 @@ export type BackupConfig = {
   default: { destination: string; schedule: string; keep: Keep }
   projects: Record<string, ProjectEntry>
   encryption_key: string
+  deleted_project_retention_days: number
 }
 
 export type Policy = {
@@ -64,6 +67,7 @@ export const PLATFORM_REPOSITORY = '_platform'
 
 const DEFAULT_SCHEDULE = '02:30'
 const DEFAULT_KEEP: Keep = { daily: 7, weekly: 4, monthly: 6 }
+const DEFAULT_DELETED_RETENTION_DAYS = 30
 const SCHEDULE = /^([01]\d|2[0-3]):[0-5]\d$/
 const NAME = /^[A-Za-z0-9_.-]{1,64}$/
 const PREFIX = /^[A-Za-z0-9_.\-/]{1,200}$/
@@ -167,6 +171,10 @@ export function parseBackupConfig(raw: string): BackupConfig {
   const encryption_key = str(doc, 'encryption_key', 'file')!
   if (encryption_key.length < 32) fail('encryption_key', 'must be at least 32 characters')
 
+  const retention = doc.deleted_project_retention_days ?? DEFAULT_DELETED_RETENTION_DAYS
+  if (typeof retention !== 'number' || !Number.isInteger(retention) || retention < 0 || retention > 3650)
+    fail('deleted_project_retention_days', 'must be a whole number of days from 0 to 3650')
+
   const projects: Record<string, ProjectEntry> = {}
   if (doc.projects !== undefined && doc.projects !== null) {
     if (!isObject(doc.projects)) fail('projects', 'must be a mapping')
@@ -199,6 +207,7 @@ export function parseBackupConfig(raw: string): BackupConfig {
     },
     projects,
     encryption_key,
+    deleted_project_retention_days: retention,
   }
 }
 

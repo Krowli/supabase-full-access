@@ -5,7 +5,7 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { forgetArgs, resticEnv, type Policy } from './config.ts'
+import { forgetArgs, resticEnv, type Destination, type Policy } from './config.ts'
 import { lastError, must, type Exec } from './exec.ts'
 import { benignRestoreError, filterRoles, filterToc, rewriteProjectRef } from './restore-plan.ts'
 import { lifecycleRule } from './s3.ts'
@@ -37,6 +37,30 @@ function mcEnv(deps: JobDeps): Record<string, string> {
   url.username = encodeURIComponent(deps.minio.rootUser)
   url.password = encodeURIComponent(deps.minio.rootPassword)
   return { MC_HOST_platform: url.toString().replace(/\/+$/, ''), MC_CONFIG_DIR: join(deps.stageDir, '.mc') }
+}
+
+const REF = /^[a-z]{20}$/
+
+/**
+ * Removes one project's whole repository, <bucket>/<prefix>/<ref>/, from its destination: the
+ * backups of a project deleted longer ago than deleted_project_retention_days. Only ever a ref's
+ * own folder, never the prefix or the bucket. Nothing there any more counts as done.
+ */
+export async function removeRepository(deps: JobDeps, d: Destination, ref: string): Promise<void> {
+  if (!REF.test(ref)) throw new Error(`Not a project ref: ${ref.slice(0, 40)}`)
+  const url = new URL(d.endpoint)
+  url.username = encodeURIComponent(d.access_key_id)
+  url.password = encodeURIComponent(d.secret_access_key)
+  const path = `${['dest', d.bucket, d.prefix, ref].filter(Boolean).join('/')}/`
+  const r = await deps.exec('mc', ['rm', '--recursive', '--force', '--quiet', path], {
+    env: {
+      MC_HOST_dest: url.toString().replace(/\/+$/, ''),
+      MC_CONFIG_DIR: join(deps.stageDir, '.mc'),
+      ...(d.region ? { MC_REGION: d.region } : {}),
+    },
+  })
+  if (r.code !== 0 && !/does not exist|NoSuchKey|not found/i.test(r.stderr))
+    throw new Error(`Remove backups: ${lastError(r.stderr)}`)
 }
 
 async function exists(path: string): Promise<boolean> {
