@@ -194,6 +194,25 @@ export class Provisioner {
   }
 
   /**
+   * Puts the current project template into an existing project's Coolify service and restarts
+   * it (the services restart with the new compose; data and settings stay). For template changes
+   * that existing projects need, e.g. a new command for one of the containers.
+   */
+  async updateStack(ref: string): Promise<void> {
+    if (this.running.has(ref)) throw new ConflictError(`Project ${ref} is being provisioned`)
+    const { registry, coolify } = this.deps
+    const project = await registry.get(ref)
+    if (!project) throw new NotFoundError(`Project ${ref} not found`)
+    const uuid = project.coolify_service_uuid
+    if (project.status !== 'ACTIVE_HEALTHY' || !uuid)
+      throw new ConflictError(`Project ${ref} is ${project.status}, not ACTIVE_HEALTHY`)
+    if (!(await coolify.getService(uuid))) throw new Error(`Coolify service ${uuid} disappeared`)
+    await coolify.updateCompose(uuid, this.deps.renderCompose(ref))
+    await coolify.restart(uuid)
+    this.log('project.stack_updated', { ref, uuid })
+  }
+
+  /**
    * Removes the project from Kong, Realtime and Supavisor, deletes the Coolify service (with
    * volumes, networks and configuration), the MinIO bucket and key, the settings directories
    * Studio wrote, then the registry rows.

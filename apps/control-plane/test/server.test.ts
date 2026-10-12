@@ -108,6 +108,17 @@ describe('HTTP API', () => {
     expect((await registry.get(project.ref))!.status).toBe('ACTIVE_HEALTHY')
   })
 
+  it('updates the stack of a project to the current template', async () => {
+    const { project, done } = await provisioner.create('Stack')
+    await done
+    const res = await api(`/projects/${project.ref}/stack`, { method: 'POST' })
+    expect(res.status).toBe(202)
+    expect(await res.json()).toEqual({ ref: project.ref, updated: true })
+    expect(coolify.calls.slice(-2)).toEqual(['updateCompose', 'restart'])
+    expect((await api(`/projects/${project.ref}/stack`, { method: 'POST' }, null)).status).toBe(401)
+    expect((await api('/projects/abcdefghijklmnopqrst/stack', { method: 'POST' })).status).toBe(404)
+  })
+
   it('validates input', async () => {
     expect((await api('/projects', { method: 'POST', body: '{}' })).status).toBe(400)
     expect((await api('/projects', { method: 'POST', body: 'nope' })).status).toBe(400)

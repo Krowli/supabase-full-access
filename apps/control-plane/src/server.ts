@@ -122,21 +122,28 @@ export function createApp(deps: ServerDeps): Server {
       throw new HttpError(405, 'Method not allowed')
     }
 
-    const match = /^\/projects\/([^/]+)(\/secrets)?$/.exec(path)
+    const match = /^\/projects\/([^/]+)(\/secrets|\/stack)?$/.exec(path)
     if (match) {
-      const [, ref, secrets] = match
+      const [, ref, sub] = match
+      const secrets = sub === '/secrets'
       if (!REF.test(ref)) throw new HttpError(404, 'Project not found')
+      if (sub === '/stack') {
+        if (method !== 'POST') throw new HttpError(405, 'Method not allowed')
+        // Rewrites the project's compose from the current template and restarts its stack.
+        await provisioner.updateStack(ref)
+        return send(res, 202, { ref, updated: true })
+      }
       if (method === 'GET' && secrets) {
         const s = await registry.getSecrets(ref)
         if (!s) throw new HttpError(404, 'Project not found')
         return send(res, 200, { ref, ...s })
       }
-      if (method === 'GET' && !secrets) {
+      if (method === 'GET' && !sub) {
         const project = await registry.get(ref)
         if (!project) throw new HttpError(404, 'Project not found')
         return send(res, 200, view(project))
       }
-      if (method === 'DELETE' && !secrets) {
+      if (method === 'DELETE' && !sub) {
         await provisioner.delete(ref)
         return send(res, 200, { ref, deleted: true })
       }
