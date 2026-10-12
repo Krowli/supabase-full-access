@@ -9,10 +9,11 @@
 # fill in is CONTROL_PLANE_COOLIFY_TOKEN (a Coolify API token, write access); the other plain
 # variables come with defaults.
 #
-# Networking: every container joins the shared `coolify` network (declared below, so no
-# "Connect to Predefined Network" checkbox). Other stacks reach this one only by the
-# supa-platform-* aliases: project stacks use minio, imgproxy and studio; verify.py the rest. The
-# aliases are fixed, so there is one platform per server. Inside this stack the short names
+# Networking: every container except platform-db and projects-dir joins the shared `coolify`
+# network (declared below, so no "Connect to Predefined Network" checkbox). Other stacks reach this
+# one by the supa-platform-* aliases: project stacks use minio, imgproxy and studio; verify.py the
+# rest. The aliases are fixed, so there is one platform per server. (Compose also gives each
+# container its short service name there; project stacks name theirs supabase-*.) Inside this stack the short names
 # (kong, realtime, minio, ...) work; project containers are supabase-{db,auth,rest,storage}-<uuid>.
 # Nothing is published except Kong's proxy and the control plane's port on the WireGuard address:
 # the gateway host's Traefik sends *.<PROJECT_DOMAIN_SUFFIX> to Kong, and its sync container
@@ -167,6 +168,10 @@ services:
       - PG_META_DB_USER=none
       - PG_META_DB_PASSWORD=none
       - 'CRYPTO_KEY=${SERVICE_PASSWORD_PGMETA}'
+    # On `coolify` to reach the project databases (supabase-db-<uuid>).
+    networks:
+      coolify:
+        aliases: [supa-platform-postgres-meta]
 
   imgproxy:
     image: 'darthsim/imgproxy:v3.30.1'
@@ -327,6 +332,6 @@ volumes:
   studio-snippets:
 
 networks:
-  # Coolify's shared network on every server; Coolify adds it to every service of the stack.
+  # Coolify's shared network on every server.
   coolify:
     external: true
