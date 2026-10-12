@@ -43,6 +43,10 @@ import { RestoringState } from './RestoringState'
 import { UnhealthyState } from './UnhealthyState'
 import { UpgradingState } from './UpgradingState'
 import { CreateBranchModal } from '@/components/interfaces/BranchManagement/CreateBranchModal'
+import {
+  isProvisioning,
+  ProvisioningState,
+} from '@/components/interfaces/MultiProject/ProvisioningState'
 import { ProjectAPIDocs } from '@/components/interfaces/ProjectAPIDocs/ProjectAPIDocs'
 import { BannerExplorer } from '@/components/ui/BannerStack/Banners/BannerExplorer'
 import { BannerFreeMicroUpgrade } from '@/components/ui/BannerStack/Banners/BannerFreeMicroUpgrade'
@@ -58,6 +62,7 @@ import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { withAuth } from '@/hooks/misc/withAuth'
 import { PROJECT_STATUS } from '@/lib/constants'
 import { MANAGED_BY } from '@/lib/constants/infrastructure'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import { buildStudioPageTitle } from '@/lib/page-title'
 import { getPathnameWithoutQuery } from '@/lib/pathname.utils'
 import { useAppStateSnapshot } from '@/state/app-state'
@@ -493,6 +498,10 @@ const ContentWrapper = ({ children }: ContentWrapperProps) => {
   useEffect(() => {
     if (ref) state.setSelectedDatabaseId(ref)
   }, [ref])
+
+  // Fork: building and failed setup on every database page, home included (deploy/platform/SPEC.md M6)
+  if (IS_MULTI_PROJECT && requiresDbConnection && isProvisioning(selectedProject?.status))
+    return <ProvisioningState status={selectedProject?.status} />
 
   if (isRestarting && !isBackupsPage) {
     return <RestartingState />

@@ -9,6 +9,7 @@ import {
 } from 'ui-patterns/PageHeader'
 
 import { subscriptionHasHipaaAddon } from '@/components/interfaces/Billing/Subscription/Subscription.utils'
+import { MultiProjectDeletePanel } from '@/components/interfaces/MultiProject/MultiProjectDeletePanel'
 import { ComplianceConfig } from '@/components/interfaces/Settings/General/ComplianceConfig/ProjectComplianceMode'
 import { CustomDomainConfig } from '@/components/interfaces/Settings/General/CustomDomainConfig/CustomDomainConfig'
 import { DeleteBranchPanel } from '@/components/interfaces/Settings/General/DeleteBranchPanel'
@@ -23,6 +24,7 @@ import { useOrgSubscriptionQuery } from '@/data/subscriptions/org-subscription-q
 import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import type { NextPageWithLayout } from '@/types'
 
 const ProjectSettings: NextPageWithLayout = () => {
@@ -64,6 +66,8 @@ const ProjectSettings: NextPageWithLayout = () => {
             {isBranch ? <DeleteBranchPanel /> : <DeleteProjectPanel />}
           </>
         )}
+        {/* Fork: delete through the control plane (deploy/platform/SPEC.md M6) */}
+        {IS_MULTI_PROJECT && <MultiProjectDeletePanel />}
       </PageContainer>
     </>
   )
