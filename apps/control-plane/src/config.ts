@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 
 import type { CoolifyConfig } from './coolify.ts'
+import type { DashboardOptions } from './kong.ts'
 import { parseSecretsKey } from './secrets.ts'
 import type { SharedEndpoints } from './template.ts'
 
@@ -19,6 +20,8 @@ export type Config = {
   realtimeUrl: string
   adminJwtSecret: string
   minio: { url: string; rootUser: string; rootPassword: string }
+  /** Studio, routed by Kong at studio.<suffix> with basic auth, when DASHBOARD_URL is set. */
+  dashboard?: DashboardOptions
   templatePath: string
   healthTimeoutMs: number
   pollIntervalMs: number
@@ -64,6 +67,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       rootUser: req('MINIO_ROOT_USER'),
       rootPassword: req('MINIO_ROOT_PASSWORD'),
     },
+    dashboard: env.DASHBOARD_URL
+      ? {
+          url: env.DASHBOARD_URL,
+          username: req('DASHBOARD_USERNAME'),
+          password: req('DASHBOARD_PASSWORD'),
+        }
+      : undefined,
   }
   if (missing.length) throw new Error(`Missing env: ${missing.join(', ')}`)
 

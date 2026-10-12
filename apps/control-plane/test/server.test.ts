@@ -23,6 +23,7 @@ const server = createApp({
   provisioner,
   apiToken: TOKEN,
   domainSuffix: 'supa.example.com',
+  extraHosts: ['studio.supa.example.com'],
 })
 let base = ''
 
@@ -54,7 +55,9 @@ describe('HTTP API', () => {
     await done
     const res = await api('/hosts', {}, null)
     expect(res.status).toBe(200)
-    expect((await res.text()).split('\n')).toContain(`${project.ref}.supa.example.com`)
+    const hosts = (await res.text()).split('\n')
+    expect(hosts).toContain(`${project.ref}.supa.example.com`)
+    expect(hosts[0]).toBe('studio.supa.example.com')
     await provisioner.delete(project.ref)
     expect(await (await api('/hosts', {}, null)).text()).not.toContain(project.ref)
   })

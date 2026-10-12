@@ -7,13 +7,15 @@
 # and lists each project host in tls.domains; the list comes from the control plane's /hosts
 # (public hostnames only). The file is rendered here, from validated names, so nothing the
 # control plane returns can reach Traefik's config verbatim. If /hosts is unreachable the
-# current file stays.
+# current file stays. Besides the project refs (20 letters), the one label DASHBOARD_LABEL (the
+# control plane's Studio route, kong.ts) gets a certificate too.
 set -eu
 NAME=${NAME:-supa-platform-staging}
 SUFFIX=${SUFFIX:-supa.aioomi.com}
 HOSTS_URL=${HOSTS_URL:-http://10.10.0.1:8011/hosts}
 KONG_URL=${KONG_URL:-http://10.10.0.1:8010}
 OUT=${OUT:-/data/coolify/proxy/dynamic/$NAME.yaml}
+DASHBOARD_LABEL=${DASHBOARD_LABEL:-studio}
 
 hosts=$(curl -fsS --max-time 5 "$HOSTS_URL") || exit 0
 esc=$(printf '%s' "$SUFFIX" | sed 's/\./\\./g')
@@ -44,7 +46,8 @@ tmp=$(mktemp)
       *."$SUFFIX") ;;
       *) continue ;;
     esac
-    printf '%s' "${h%."$SUFFIX"}" | grep -Eqx '[a-z]{20}' || continue
+    label=${h%."$SUFFIX"}
+    [ "$label" = "$DASHBOARD_LABEL" ] || printf '%s' "$label" | grep -Eqx '[a-z]{20}' || continue
     echo "          - main: $h"
     n=$((n + 1))
   done

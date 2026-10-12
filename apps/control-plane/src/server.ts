@@ -9,6 +9,8 @@ export type ServerDeps = {
   provisioner: Provisioner
   apiToken: string
   domainSuffix: string
+  /** Hosts Kong routes besides the projects' (the dashboard), listed first at /hosts. */
+  extraHosts?: string[]
 }
 
 class HttpError extends Error {
@@ -90,7 +92,10 @@ export function createApp(deps: ServerDeps): Server {
     }
     // Public hostnames only (no secrets): the gateway host polls this to request certificates.
     if (method === 'GET' && path === '/hosts') {
-      const hosts = routedProjects(await registry.list()).map((p) => `${p.ref}.${domainSuffix}`)
+      const hosts = [
+        ...(deps.extraHosts ?? []),
+        ...routedProjects(await registry.list()).map((p) => `${p.ref}.${domainSuffix}`),
+      ]
       res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' })
       return res.end(hosts.map((h) => `${h}\n`).join(''))
     }
