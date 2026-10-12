@@ -10,6 +10,7 @@ import { useProjectAddonsQuery } from '@/data/subscriptions/project-addons-query
 import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { IS_PLATFORM } from '@/lib/constants'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
 
 export const useGenerateDatabaseMenu = (): ProductMenuGroup[] => {
@@ -129,10 +130,14 @@ export const useGenerateDatabaseMenu = (): ProductMenuGroup[] => {
             label: enablePgReplicate ? 'New' : undefined,
             shortcutId: SHORTCUT_IDS.NAV_DATABASE_REPLICATION,
           },
-        IS_PLATFORM && {
+        // Fork: a multi-project Studio has the platform's backups (deploy/platform/SPEC.md §19).
+        (IS_PLATFORM || IS_MULTI_PROJECT) && {
           name: 'Backups',
           key: 'backups',
-          url: pitrEnabled ? getDatabaseURL('backups/pitr') : getDatabaseURL('backups/scheduled'),
+          url:
+            pitrEnabled && !IS_MULTI_PROJECT
+              ? getDatabaseURL('backups/pitr')
+              : getDatabaseURL('backups/scheduled'),
           shortcutId: SHORTCUT_IDS.NAV_DATABASE_BACKUPS,
         },
         {

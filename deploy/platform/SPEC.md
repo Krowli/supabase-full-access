@@ -1585,3 +1585,39 @@ settings, sign-up, sign-in, `/auth/v1/user` and REST as that user, then both del
   `directUrl` on 6542.
 - Projects: `pieowl` (`projectref1aaaaaaaaa`, role `pieowl` for the Pieowl apps) and `projectb`
   (`projectref2bbbbbbbbb`, 7 app migrations, 3 pg_cron jobs — pg_cron works in project stacks).
+
+
+## 19. Backups (2026-10-12): Database → Backups
+
+- **Service:** `backup` in `platform-compose.yaml`, the control-plane image run as
+  `node src/backup/main.ts` (`apps/control-plane/src/backup`). Tools in the image: restic, Postgres
+  17 clients, mc. Run records in `_platform.backup_runs`. HTTP API on the stack network only
+  (token = the control plane's): `GET /projects/<ref>`, `POST /projects/<ref>/backups`,
+  `POST /projects/<ref>/restore {snapshot_id, name}`; `GET /health` answers 503 while a backup
+  failed or is overdue (Coolify shows the platform unhealthy).
+- **Configuration:** `BACKUP_CONFIG` (YAML/JSON, base64 allowed) = `infra/platform/backups.yaml`,
+  put into the platform app's env by the infra sync (`after: none`). The service re-reads it from
+  the Coolify API before every run (needs a token that may read values; otherwise it uses the value
+  the container started with). Destinations are S3-compatible; per project (by name or ref):
+  destination, schedule (daily, UTC), keep, password, enabled. Default 02:30 UTC, keep 7 daily /
+  4 weekly / 6 monthly.
+- **Per project:** one restic repository `<bucket>/<prefix>/<ref>`, password
+  HMAC-SHA256(`encryption_key`, `restic:<ref>`) unless the project sets its own. Contents:
+  `pg_dumpall --roles-only`, `pg_dump -Fc` of `postgres` (as `supabase_admin`), the pgsodium root
+  key (`pg_read_file`), the bucket `<ref>` mirrored (`mc mirror`, incremental via the `backup-stage`
+  volume), and `/data/supa-platform/projects/<ref>`. The platform DB (`_supabase`, `postgres`) is
+  the repository `_platform`.
+- **Restore** always goes into a new project (control plane creates it): pgsodium key written with
+  `lo_from_bytea`/`lo_export`, settings files copied (old project host rewritten), stack restarted
+  (Coolify) and awaited by `pg_postmaster_start_time`, then only the roles the new project lacks
+  (the dump also sets the passwords of the roles the stack runs on), then
+  `pg_restore --clean --if-exists` without the GraphQL entries (a clean restore drops
+  `graphql_public.graphql` and its grants), `notify pgrst`, then the files (`<ref>/` key prefix =
+  storage TENANT_ID). Tested by hand first: users (sign-in works), RLS, triggers on auth.users,
+  Vault secret readable, pg_cron job, storage object, ACLs equal apart from equivalent forms.
+- **Lifecycle guard:** restic keeps unchanged data in old pack files, so a bucket rule that deletes
+  old objects breaks every snapshot. Each run HEADs the repository's `config` and fails with a clear
+  message when S3 answers `x-amz-expiration` (src/backup/s3.ts, SigV4 tested against AWS's example).
+- **Studio:** Database → Backups (`IS_MULTI_PROJECT`): `components/interfaces/MultiProject/PlatformBackups.tsx`,
+  routes `pages/api/platform/projects/[ref]/backups/{index,restore}.ts`
+  (`lib/api/self-hosted/project-backups.ts`, `STUDIO_BACKUP_URL`). No keys are shown or set there.

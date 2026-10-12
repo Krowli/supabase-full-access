@@ -14,6 +14,7 @@ import { PageSection, PageSectionContent } from 'ui-patterns/PageSection'
 import { GenericSkeletonLoader } from 'ui-patterns/ShimmeringLoader'
 
 import { BackupsList } from '@/components/interfaces/Database/Backups/BackupsList'
+import { PlatformBackups } from '@/components/interfaces/MultiProject/PlatformBackups'
 import DatabaseBackupsNav from '@/components/interfaces/Database/Backups/DatabaseBackupsNav'
 import { DatabaseLayout } from '@/components/layouts/DatabaseLayout/DatabaseLayout'
 import { DefaultLayout } from '@/components/layouts/DefaultLayout'
@@ -30,6 +31,7 @@ import {
   useOrioleDbReleaseStage,
 } from '@/hooks/misc/useSelectedProject'
 import { DOCS_URL } from '@/lib/constants'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import type { NextPageWithLayout } from '@/types'
 
 const DatabaseScheduledBackups: NextPageWithLayout = () => {
@@ -41,14 +43,17 @@ const DatabaseScheduledBackups: NextPageWithLayout = () => {
             <PageHeaderTitle>Database Backups</PageHeaderTitle>
           </PageHeaderSummary>
         </PageHeaderMeta>
-        <PageHeaderNavigationTabs>
-          <DatabaseBackupsNav active="scheduled" />
-        </PageHeaderNavigationTabs>
+        {/* Fork: a multi-project Studio has its own backups, without PITR or cloud restores. */}
+        {!IS_MULTI_PROJECT && (
+          <PageHeaderNavigationTabs>
+            <DatabaseBackupsNav active="scheduled" />
+          </PageHeaderNavigationTabs>
+        )}
       </PageHeader>
       <PageContainer>
         <PageSection>
           <PageSectionContent>
-            <ScheduledBackups />
+            {IS_MULTI_PROJECT ? <PlatformBackups /> : <ScheduledBackups />}
           </PageSectionContent>
         </PageSection>
       </PageContainer>

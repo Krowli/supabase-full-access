@@ -283,6 +283,55 @@ services:
       coolify:
         aliases: [supa-platform-control-plane]
 
+  backup:
+    # Backups of every project and of the platform database, and restores into a new project
+    # (apps/control-plane/src/backup, SPEC.md §19); Studio's Database → Backups talks to it. Same
+    # image as the control plane, built the same way. What goes where is BACKUP_CONFIG: kept in the
+    # infra repository (platform/backups.yaml) and put here by its sync; the service reads it again
+    # from Coolify before every run, so a change needs no Deploy. /health answers 503 while a
+    # project's last backup failed or is overdue, which Coolify shows as unhealthy.
+    build:
+      context: .
+      dockerfile: apps/control-plane/Dockerfile
+    command: ['node', 'src/backup/main.ts']
+    depends_on:
+      control-plane:
+        condition: service_started
+      platform-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - PORT=8080
+      - 'COOLIFY_URL=${CONTROL_PLANE_COOLIFY_URL:-https://coolify-admin.example.com/api/v1}'
+      - 'COOLIFY_TOKEN=${CONTROL_PLANE_COOLIFY_TOKEN:?}'
+      - 'REGISTRY_DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_PLATFORMDB}@platform-db:5432/_supabase'
+      - 'PLATFORM_DB_PASSWORD=${SERVICE_PASSWORD_PLATFORMDB}'
+      - 'PLATFORM_SECRETS_KEY=${SERVICE_HEX_64_SECRETSKEY}'
+      - 'CONTROL_PLANE_TOKEN=${SERVICE_PASSWORD_CONTROLPLANE}'
+      - CONTROL_PLANE_URL=http://control-plane:8080
+      - 'PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.example.com}'
+      - MINIO_URL=http://minio:9000
+      - 'MINIO_ROOT_USER=${SERVICE_USER_MINIO}'
+      - 'MINIO_ROOT_PASSWORD=${SERVICE_PASSWORD_MINIO}'
+      - PROJECTS_HOST_DIR=/data/supa-platform/projects
+      - STAGE_DIR=/stage
+      - 'BACKUP_CONFIG=${BACKUP_CONFIG:-}'
+    volumes:
+      # Restores write the new project's settings files here.
+      - '/data/supa-platform/projects:/data/supa-platform/projects'
+      # Dumps on their way out, and a copy of every bucket so each night copies only changes.
+      - 'backup-stage:/stage'
+    healthcheck:
+      test: [CMD, wget, '-q', '-O', /dev/null, 'http://127.0.0.1:8080/health']
+      interval: 60s
+      timeout: 10s
+      retries: 2
+      start_period: 120s
+    networks:
+      coolify:
+        aliases: [supa-platform-backup]
+
   studio:
     # Multi-project Studio (.github/workflows/studio-fork-publish.yml run on main with
     # multi_project=true, tag `platform`), pinned by digest: a new Studio is a commit here, then Deploy.
@@ -308,6 +357,8 @@ services:
       # The registry: the control plane in this stack (same service network, short name).
       - 'STUDIO_PROJECT_REGISTRY_URL=http://control-plane:8080'
       - 'STUDIO_PROJECT_REGISTRY_TOKEN=${SERVICE_PASSWORD_CONTROLPLANE}'
+      # Database → Backups (the backup service above; same token).
+      - 'STUDIO_BACKUP_URL=http://backup:8080'
       - 'STUDIO_PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.example.com}'
       # No single-project stack here: `default` is the project list, not a database (SPEC.md §15).
       - STUDIO_DEFAULT_PROJECT=none
@@ -337,6 +388,7 @@ volumes:
   platform-db-data:
   minio-data:
   studio-snippets:
+  backup-stage:
 
 networks:
   # Coolify's shared network on every server.
