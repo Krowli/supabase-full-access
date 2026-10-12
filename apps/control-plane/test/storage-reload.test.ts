@@ -94,6 +94,24 @@ describe('storage-api restarts when Studio rewrites storage.env', () => {
     }
   })
 
+  it('kills a storage-api that lingers after SIGTERM, so the new one starts', async () => {
+    // storage-api logs "Shutdown successfully" at once but its process stays up to a minute.
+    dir = mkdtempSync(join(tmpdir(), 'storage-reload-'))
+    writeFileSync(join(dir, 'log'), '')
+    writeFileSync(join(dir, 'storage.env'), 'FILE_SIZE_LIMIT=1000\n')
+    const lingering = `sh -c 'echo "start $FILE_SIZE_LIMIT" >> ${dir}/log; trap "echo stop >> ${dir}/log" TERM; while :; do sleep 0.05; done'`
+    const body = script(dir).replaceAll(/exec sh -c '[^']*'/g, `exec ${lingering}`)
+    const child = spawn('sh', ['-c', body], { stdio: 'ignore' })
+    try {
+      await until(() => log().includes('start 1000'))
+      writeFileSync(join(dir, 'storage.env'), 'FILE_SIZE_LIMIT=2000\n')
+      await until(() => log().includes('start 2000'))
+      expect(log()).toEqual(['start 1000', 'stop', 'start 2000'])
+    } finally {
+      child.kill('SIGKILL')
+    }
+  })
+
   it('exits when storage-api itself dies, so Docker restarts the container', async () => {
     dir = mkdtempSync(join(tmpdir(), 'storage-reload-'))
     writeFileSync(join(dir, 'storage.env'), 'FILE_SIZE_LIMIT=1\n')

@@ -351,6 +351,8 @@ services:
     # storage-api reads its settings only when it starts, so this loop restarts it (inside the
     # container, a few seconds) whenever Studio rewrites storage.env: a save applies by itself.
     # If storage-api dies on its own, the container exits with its code and Docker restarts it.
+    # After SIGTERM storage-api logs "Shutdown successfully" within milliseconds but its process
+    # lingers up to a minute (open handles), so it gets 5 s and then SIGKILL.
     command:
       - sh
       - '-c'
@@ -363,7 +365,7 @@ services:
           rm -f "$$flag"
           last=$$(sum)
           (set -a; [ -f "$$f" ] && . "$$f"; set +a; exec node dist/start/server.js) & pid=$$!
-          (while sleep 5; do [ "$$(sum)" = "$$last" ] || { touch "$$flag"; kill -TERM "$$pid"; exit 0; }; done) & watch=$$!
+          (while sleep 5; do [ "$$(sum)" = "$$last" ] || { touch "$$flag"; kill -TERM "$$pid"; sleep 5; kill -KILL "$$pid" 2>/dev/null; exit 0; }; done) & watch=$$!
           wait "$$pid"; code=$$?
           [ -f "$$flag" ] && continue
           kill "$$watch" 2>/dev/null

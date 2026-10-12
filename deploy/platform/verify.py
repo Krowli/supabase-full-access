@@ -263,14 +263,22 @@ def main() -> None:
     check('Studio saves the project storage config -> 200', code == 200, str(code))
     written = on_b(f'docker exec supabase-storage-{uuid} cat /etc/studio-config/storage.env')
     check('storage.env reaches the storage container', 'UPLOAD_FILE_SIZE_LIMIT="1000"' in written and 'ENABLE_IMAGE_TRANSFORMATION="true"' in written, written.replace('\n', ' ')[:200])
-    on_b(f'docker restart supabase-storage-{uuid} >/dev/null')
-    for _ in range(60):
-        if on_b(f"docker inspect -f '{{{{.State.Health.Status}}}}' supabase-storage-{uuid}").strip() == 'healthy':
+    # No restart: the storage container's command restarts storage-api itself when storage.env changes.
+    started = on_b(f"docker inspect -f '{{{{.State.StartedAt}}}}' supabase-storage-{uuid}").strip()
+    t = time.time()
+    code_big = None
+    while time.time() - t < 60:
+        code_big, _ = public('POST', f'{base}/storage/v1/object/m5/big.bin', {**h(service), 'Content-Type': 'application/octet-stream'}, b'x' * 2000)
+        if code_big in (400, 413):
             break
+        if code_big == 200:
+            public('DELETE', f'{base}/storage/v1/object/m5/big.bin', h(service))
         time.sleep(2)
-    code_big, _ = public('POST', f'{base}/storage/v1/object/m5/big.bin', {**h(service), 'Content-Type': 'application/octet-stream'}, b'x' * 2000)
+    results['storage_reload_s'] = round(time.time() - t)
     code_small, _ = public('POST', f'{base}/storage/v1/object/m5/small.bin', {**h(service), 'Content-Type': 'application/octet-stream'}, b'x' * 500)
-    check('after a storage restart the saved limit applies (2000 B refused, 500 B stored)', code_big in (400, 413) and code_small == 200, f'{code_big} / {code_small}')
+    check('the saved limit applies without a restart (2000 B refused, 500 B stored)', code_big in (400, 413) and code_small == 200, f'{code_big} / {code_small} after {results["storage_reload_s"]}s')
+    same = on_b(f"docker inspect -f '{{{{.State.StartedAt}}}}' supabase-storage-{uuid}").strip() == started
+    check('the storage container was not restarted', same, started)
     code, body = public('GET', f'{base}/storage/v1/render/image/authenticated/m5/red.png?width=16&height=16', h(service))
     check('image transforms still on after the save (mirrored stack setting)', code == 200 and len(body) > 0, str(code))
 
