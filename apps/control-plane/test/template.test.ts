@@ -21,7 +21,9 @@ type Compose = {
     { image: string; environment: string[]; ports?: unknown; volumes?: unknown[] }
   >
 }
-const render = () => renderTemplate(template, templateValues(ref, 'supa.example.com', shared))
+const projectsDir = '/data/platform/projects'
+const render = () =>
+  renderTemplate(template, templateValues(ref, 'supa.example.com', shared, projectsDir))
 const envOf = (compose: Compose, service: string) =>
   Object.fromEntries(
     compose.services[service].environment.map((e) => e.split(/=(.*)/s).slice(0, 2))
@@ -29,7 +31,7 @@ const envOf = (compose: Compose, service: string) =>
 
 describe('renderTemplate', () => {
   it('replaces placeholders and rejects unknown ones and unsafe values', () => {
-    const values = templateValues(ref, 'x.com', shared)
+    const values = templateValues(ref, 'x.com', shared, projectsDir)
     expect(renderTemplate('a={{REF}} b={{PUBLIC_URL}}', values)).toBe(
       `a=${ref} b=https://${ref}.x.com`
     )
@@ -75,6 +77,26 @@ describe('project-compose.yaml', () => {
       ENABLE_IMAGE_TRANSFORMATION: 'true',
       IMGPROXY_URL: 'http://imgproxy-abc:8080',
     })
+  })
+
+  it('binds GoTrue and storage to the settings directories Studio writes for this ref', () => {
+    const compose = parse(render()) as Compose & {
+      services: Record<string, { command?: string[] }>
+    }
+    const auth = compose.services['supabase-auth']
+    expect(auth.command).toEqual(['auth', '--config-dir', '/etc/gotrue'])
+    expect(auth.volumes).toEqual([`${projectsDir}/${ref}/gotrue:/etc/gotrue:ro`])
+    expect(envOf(compose, 'supabase-auth')).toMatchObject({
+      GOTRUE_MAILER_TEMPLATE_RELOADING_ENABLED: 'true',
+    })
+    expect(compose.services['supabase-storage'].volumes).toEqual([
+      `${projectsDir}/${ref}/storage:/etc/studio-config:ro`,
+    ])
+    // No named volume stands in for them any more.
+    expect(Object.keys((parse(render()) as { volumes: object }).volumes).sort()).toEqual([
+      'supabase-db-config',
+      'supabase-db-data',
+    ])
   })
 
   it('keeps every secret out of the compose and reads exactly the env vars the provisioner sets', () => {

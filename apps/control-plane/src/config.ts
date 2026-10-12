@@ -12,6 +12,11 @@ export type Config = {
   secretsKey: Buffer
   apiToken: string
   domainSuffix: string
+  /**
+   * Where each project's settings files live on the host (src/project-dirs.ts). The platform
+   * compose binds it into this container at the same path.
+   */
+  projectsHostDir: string
   /** Shared services as project stacks reach them (rendered into each project compose). */
   projectShared: SharedEndpoints
   /** Shared services as the control plane reaches them (same Coolify service network). */
@@ -50,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     rawKey: req('PLATFORM_SECRETS_KEY'),
     apiToken: req('CONTROL_PLANE_TOKEN'),
     domainSuffix: req('PROJECT_DOMAIN_SUFFIX'),
+    projectsHostDir: req('PROJECTS_HOST_DIR'),
     projectShared: {
       s3Endpoint: req('PROJECT_S3_ENDPOINT'),
       s3Region: env.PROJECT_S3_REGION ?? 'us-east-1',

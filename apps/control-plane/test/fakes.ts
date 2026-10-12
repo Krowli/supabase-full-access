@@ -1,6 +1,7 @@
 import type { Coolify, CoolifyService } from '../src/coolify.ts'
 import type { Gateway } from '../src/kong.ts'
 import type { ObjectStorage } from '../src/minio.ts'
+import type { ProjectDirs } from '../src/project-dirs.ts'
 import { routedProjects } from '../src/provisioner.ts'
 import type { Project, ProjectStatus, ProjectUpdate, Registry } from '../src/registry.ts'
 import type { ProjectSecrets } from '../src/secrets.ts'
@@ -167,6 +168,18 @@ export class FakeStorage extends FailOnce implements ObjectStorage {
   }
 }
 
+export class FakeProjectDirs extends FailOnce implements ProjectDirs {
+  dirs = new Set<string>()
+  async ensure(ref: string) {
+    this.maybeFail('dirs ensure')
+    this.dirs.add(ref)
+  }
+  async remove(ref: string) {
+    this.maybeFail('dirs remove')
+    this.dirs.delete(ref)
+  }
+}
+
 /** Records which refs each sync would route, read from the registry like the real one. */
 export class FakeGateway extends FailOnce implements Gateway {
   routed: string[] = []
@@ -189,5 +202,6 @@ export function fakeShared(registry: Registry) {
     pooler: new FakeTenants(),
     realtime: new FakeTenants(),
     gateway: new FakeGateway(registry),
+    projectDirs: new FakeProjectDirs(),
   }
 }
