@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { PermissionAction } from '@supabase/shared-types/out/constants'
-import { IS_PLATFORM, useParams } from 'common'
+import { useParams } from 'common'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { SubmitHandler, useForm } from 'react-hook-form'
@@ -25,7 +25,6 @@ import {
   TableRow,
   WarningIcon,
 } from 'ui'
-import { Admonition } from 'ui-patterns/Admonition'
 import { Input } from 'ui-patterns/DataInputs/Input'
 import { FormItemLayout } from 'ui-patterns/form/FormItemLayout/FormItemLayout'
 import { PageContainer } from 'ui-patterns/PageContainer'
@@ -55,6 +54,7 @@ import { useStorageCredentialsQuery } from '@/data/storage/s3-access-key-query'
 import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
 import { useIsProjectActive, useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { DOCS_URL } from '@/lib/constants'
+import { StorageSettingsNotice } from './StorageSettingsNotice'
 
 export const S3Connection = () => {
   const { ref: projectRef } = useParams()
@@ -142,14 +142,7 @@ export const S3Connection = () => {
           </PageSectionMeta>
 
           <PageSectionContent>
-            {!IS_PLATFORM && (
-              <Admonition
-                className="mb-4"
-                type="default"
-                title="Changes apply after a restart"
-                description="Self-hosted storage reads these settings at start-up. After saving, restart the supabase-storage service in Coolify."
-              />
-            )}
+            <StorageSettingsNotice className="mb-4" />
             {isErrorStorageConfig && (
               <AlertError
                 className="mb-4"

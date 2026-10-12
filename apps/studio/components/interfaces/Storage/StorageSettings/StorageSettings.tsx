@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { PermissionAction } from '@supabase/shared-types/out/constants'
-import { IS_PLATFORM, useParams } from 'common'
+import { useParams } from 'common'
 import { useEffect, useMemo, useState } from 'react'
 import { SubmitHandler, useForm } from 'react-hook-form'
 import { toast } from 'sonner'
@@ -21,7 +21,6 @@ import {
   SelectValue,
   Switch,
 } from 'ui'
-import { Admonition } from 'ui-patterns/Admonition'
 import { FormItemLayout } from 'ui-patterns/form/FormItemLayout/FormItemLayout'
 import { PageContainer } from 'ui-patterns/PageContainer'
 import { PageSection, PageSectionContent } from 'ui-patterns/PageSection'
@@ -53,6 +52,7 @@ import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganizati
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { DOCS_URL } from '@/lib/constants'
 import { formatBytes } from '@/lib/helpers'
+import { StorageSettingsNotice } from './StorageSettingsNotice'
 
 const formId = 'storage-settings-form'
 
@@ -234,13 +234,7 @@ export const StorageSettings = () => {
       <PageSection>
         <PageSectionContent className="flex flex-col gap-y-8">
           <Form {...form}>
-            {!IS_PLATFORM && (
-              <Admonition
-                type="default"
-                title="Changes apply after a restart"
-                description="Self-hosted storage reads these settings at start-up. After saving, restart the supabase-storage service in Coolify."
-              />
-            )}
+            <StorageSettingsNotice />
             {isLoading ? (
               <GenericSkeletonLoader />
             ) : (
