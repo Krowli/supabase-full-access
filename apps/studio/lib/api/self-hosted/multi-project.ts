@@ -8,6 +8,7 @@ import {
   currentProjectRef,
   currentProjectStatus,
   DEFAULT_PROJECT_REF,
+  hasDefaultStack,
   isMultiProject,
   projectEnv,
   projectJwtSecret,
@@ -116,7 +117,9 @@ export function applyProjectDetail(detail: {
   // The building screen shows while this is `COMING_UP` and polls `/status` until it is running.
   detail.status = currentProjectStatus()
   detail.inserted_at = currentProjectInsertedAt() ?? detail.inserted_at
-  detail.restUrl = publicEndpoint().restUrl
+  // `default` without a stack has no endpoint; the dashboard only reads its status and moves on.
+  const isStacklessDefault = ref === DEFAULT_PROJECT_REF && !hasDefaultStack()
+  detail.restUrl = isStacklessDefault ? '' : publicEndpoint().restUrl
 }
 
 /**

@@ -19,7 +19,8 @@ import { z } from 'zod'
  *
  * A project the control plane has not given a stack yet has no uuid, so it gets no database host
  * and no keys: it can be listed and polled for its status, and every backend read for it fails
- * (`project-context.ts`, `projectEnv`) rather than reaching another project's.
+ * (`project-context.ts`, `projectEnv`) rather than reaching another project's. A project being
+ * deleted (`DELETING`) is treated the same way.
  */
 
 export type ControlPlaneConfig = {
@@ -43,7 +44,15 @@ const STATUS: Record<string, string> = {
   COMING_UP: 'COMING_UP',
   ACTIVE_HEALTHY: 'ACTIVE_HEALTHY',
   FAILED: 'INIT_FAILED',
+  // Being deleted, or a delete stopped at a step (the control plane's next DELETE continues it).
+  DELETING: 'GOING_DOWN',
 }
+
+/**
+ * The control plane is tearing it down: nothing may read its backends, and its secrets go with its
+ * rows at the end of the delete, so they are not asked for.
+ */
+const DELETING = 'DELETING'
 
 /** A control-plane status as the dashboard knows it. */
 export const platformStatus = (status: string): string => STATUS[status] ?? 'UNKNOWN'
@@ -166,7 +175,7 @@ export async function fetchControlPlaneProjects(
       }
 
       const uuid = project.coolify_service_uuid
-      if (uuid) {
+      if (uuid && project.status !== DELETING) {
         const path = `/projects/${project.ref}/secrets`
         const secrets = parse(secretsSchema, await getJson(config, path), path)
         Object.assign(env, {

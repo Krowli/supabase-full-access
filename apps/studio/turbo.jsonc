@@ -89,6 +89,8 @@
         "STUDIO_PROJECT_REGISTRY_URL",
         "STUDIO_PROJECT_REGISTRY_TOKEN",
         "STUDIO_PROJECT_DOMAIN_SUFFIX",
+        // `none` on a platform stack, where no single-project stack backs `default`.
+        "STUDIO_DEFAULT_PROJECT",
         // Supavisor's admin API, the tenant it serves, and the port clients pool through. Read by
         // the self-hosted connection-pooling endpoints (see lib/api/self-hosted/service-config).
         "SUPAVISOR_URL",
