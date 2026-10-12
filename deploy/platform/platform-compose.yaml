@@ -339,7 +339,7 @@ services:
     # Multi-project Studio (.github/workflows/studio-fork-publish.yml run on main with
     # multi_project=true, tag `platform`), pinned by digest: a new Studio is a commit here, then Deploy.
     # Every project comes from the control plane (SPEC.md §11-§12).
-    image: 'ghcr.io/krowli/supabase-full-access-studio:platform-2026.10.12-sha-6560de6@sha256:4d9be78feca7d5172d30aef21cdc4a954b2f264047b07c3a2d200348eedbe5f6'
+    image: 'ghcr.io/krowli/supabase-full-access-studio:platform-2026.10.12-sha-0d7b7bc@sha256:e1ba21ca37cb44bfce1223935c252678d213b9fff1e3b3285eebac7bde96e2cb'
     depends_on:
       control-plane:
         condition: service_started
