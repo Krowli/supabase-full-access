@@ -846,6 +846,18 @@ building screen and then the project home; the project is in the dropdown and it
 works) needs a Studio image built with `multi_project: true`, the platform stack with the control
 plane (M4/M5) and wildcard DNS for `<ref>.<suffix>`.
 
+**Build fix (2026-10-12).** The first `multi_project: true` image build (Actions run 38187495648)
+failed in `next build`: Turbopack could not write `/project/[ref]/settings/integrations` because
+`node:async_hooks` reached a browser chunk. Chain: page → `IntegrationSettings` → `VercelSection`
+→ `lib/integration-utils.ts` → `lib/api/apiWrapper.ts` (for `isResponseOk`) →
+`lib/api/self-hosted/project-context.ts` (M1 made `apiWrapper` wrap every route in the project
+context). tsc, ESLint and vitest never saw it. Fix: `isResponseOk` moved to
+`lib/api/apiWrapper.browser.ts` (the repo's `snippets.browser.ts` split), imported by
+`apiWrapper.ts` and `integration-utils.ts`. Guard: `lib/api/self-hosted/client-import-guard.test.ts`
+walks the value imports from `pages` (non-api), `components`, `hooks`, `data`, `state` and
+`lib/constants`, and fails, with the chain, on any Node builtin or on `lib/api/self-hosted/**`,
+`self-hosted-admin.ts`, `apiWrapper.ts` or `apiHelpers.ts`.
+
 > Sections 13-14 were written on branch `platform/cp-service` (control plane) in parallel with
 > 9-12 (Studio) and renumbered when the branches were merged.
 
