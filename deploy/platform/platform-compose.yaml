@@ -9,7 +9,11 @@
 # address, where the gateway host's Traefik sends *.<PROJECT_DOMAIN_SUFFIX>, and the control
 # plane's port for the gateway host to read /hosts (the API itself needs CONTROL_PLANE_TOKEN).
 # Studio (multi-project) is reached only through Kong, at studio.<PROJECT_DOMAIN_SUFFIX> with
-# basic auth (DASHBOARD_USERNAME / DASHBOARD_PASSWORD; the control plane renders that route).
+# basic auth (SERVICE_USER_ADMIN / SERVICE_PASSWORD_ADMIN; the control plane renders that route).
+# Those two names are what Coolify's "Service configuration" panel (service → General) shows as
+# "Supabase · Dashboard User / Dashboard Password" for a stack with a `kong` image
+# (Coolify v4.4.6 app/Models/Service.php extraFields()); the control plane gets them as
+# DASHBOARD_USERNAME / DASHBOARD_PASSWORD, as the one-click Supabase template gives them to Kong.
 #
 # Env (Coolify service env, all secrets generated outside Coolify):
 #   PLATFORM_DB_PASSWORD, PLATFORM_ADMIN_JWT_SECRET (Supavisor and Realtime admin API, later
@@ -19,8 +23,12 @@
 #   PLATFORM_SECRETS_KEY, CP_COOLIFY_URL, CP_COOLIFY_TOKEN, CP_COOLIFY_PROJECT_UUID,
 #   CP_COOLIFY_ENVIRONMENT, CP_COOLIFY_SERVER_UUID (prefixed so they cannot collide with the
 #   COOLIFY_* variables Coolify sets itself), PROJECT_DOMAIN_SUFFIX, PROJECT_S3_ENDPOINT (http://minio-<this-uuid>:9000),
-#   PROJECT_IMGPROXY_URL (http://imgproxy-<this-uuid>:8080), DASHBOARD_USERNAME,
-#   DASHBOARD_PASSWORD, STUDIO_INTERNAL_URL (http://studio-<this-uuid>:3000).
+#   PROJECT_IMGPROXY_URL (http://imgproxy-<this-uuid>:8080), SERVICE_USER_ADMIN,
+#   SERVICE_PASSWORD_ADMIN, STUDIO_INTERNAL_URL (http://studio-<this-uuid>:3000).
+#
+# {{PROJECTS_HOST_DIR}} (deploy.py --projects-host-dir) is the host directory with every project's
+# settings files, <ref>/{gotrue,storage,state}: Studio writes them, each project's GoTrue and
+# storage-api read their own, and the control plane creates and removes <ref>/ (SPEC.md §16).
 services:
   platform-db:
     image: 'postgres:17-alpine'
@@ -186,12 +194,29 @@ services:
       timeout: 20s
       retries: 10
 
+  projects-dir:
+    # One-shot: the control plane runs as uid 1000 (also GoTrue's user) and creates <ref>/ in here,
+    # so the directory has to be its own. Same image as the control plane, as root, then exits.
+    image: 'ghcr.io/krowli/supabase-control-plane:{{CONTROL_PLANE_TAG}}'
+    pull_policy: missing
+    user: '0'
+    restart: 'no'
+    exclude_from_hc: true
+    entrypoint:
+      - /bin/sh
+      - '-c'
+      - 'chown 1000:1000 /projects && chmod 755 /projects'
+    volumes:
+      - '{{PROJECTS_HOST_DIR}}:/projects'
+
   control-plane:
     # Built by .github/workflows/control-plane-publish.yml. deploy.sh fills in the tag.
     image: 'ghcr.io/krowli/supabase-control-plane:{{CONTROL_PLANE_TAG}}'
     # Tags are immutable (sha-<commit>); an image built on the server is used as it is.
     pull_policy: missing
     depends_on:
+      projects-dir:
+        condition: service_completed_successfully
       platform-db:
         condition: service_healthy
       kong:
@@ -221,8 +246,12 @@ services:
       - 'MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}'
       # Kong routes studio.<suffix> to Studio with basic auth (src/kong.ts, renderDashboard).
       - 'DASHBOARD_URL=http://studio:3000'
-      - 'DASHBOARD_USERNAME=${DASHBOARD_USERNAME}'
-      - 'DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}'
+      - 'DASHBOARD_USERNAME=${SERVICE_USER_ADMIN}'
+      - 'DASHBOARD_PASSWORD=${SERVICE_PASSWORD_ADMIN}'
+      # Rendered into each project compose, and bound here at the same path (src/project-dirs.ts).
+      - 'PROJECTS_HOST_DIR={{PROJECTS_HOST_DIR}}'
+    volumes:
+      - '{{PROJECTS_HOST_DIR}}:{{PROJECTS_HOST_DIR}}'
     ports:
       - '10.10.0.1:8011:8080'
 
@@ -269,8 +298,8 @@ services:
     volumes:
       - 'studio-snippets:/app/snippets'
       # Per-project GoTrue, storage and state files Studio writes (<ref>/{gotrue,storage,state})
-      # under its fixed projectsDir; on the host they live under the platform's own path.
-      - '/data/supa-platform-staging/projects:/data/pieowl/projects'
+      # under its fixed projectsDir; on the host they live under {{PROJECTS_HOST_DIR}}.
+      - '{{PROJECTS_HOST_DIR}}:/data/pieowl/projects'
 
 volumes:
   platform-db-data:

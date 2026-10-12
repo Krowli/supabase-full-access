@@ -7,7 +7,9 @@
 
     deploy.py deploy FILE --project UUID --environment NAME --server UUID --tag TAG
               --studio-image IMAGE@sha256:DIGEST [--service UUID] [--projects-environment NAME] [--domain-suffix SUFFIX]
-        Renders the compose with the control-plane image tag and the Studio image, creates the Coolify service (or
+              [--projects-host-dir PATH]
+        Renders the compose with the control-plane image tag, the Studio image and the host directory
+        of the projects' settings files (default /data/supa-platform-staging/projects), creates the Coolify service (or
         updates --service), turns on connect_to_docker_network, sets the env (secrets from FILE,
         the Coolify token from ~/.coolify-token) and (re)starts it. Prints the service uuid.
 
@@ -44,10 +46,12 @@ GENERATED = {
     'KONG_ADMIN_TOKEN': 40,
     'CONTROL_PLANE_TOKEN': 40,
     'PLATFORM_SECRETS_KEY': 64,  # hex below: 32 bytes
-    # Basic auth in front of Studio (Kong's dashboard route at studio.<suffix>).
-    'DASHBOARD_USERNAME': 16,
-    'DASHBOARD_PASSWORD': 32,
+    # Basic auth in front of Studio (Kong's dashboard route at studio.<suffix>). Named as Coolify's
+    # magic variables so its "Service configuration" panel shows them as the dashboard login.
+    'SERVICE_USER_ADMIN': 16,
+    'SERVICE_PASSWORD_ADMIN': 32,
 }
+
 
 
 def gen(name: str, length: int) -> str:
@@ -106,6 +110,9 @@ def cmd_deploy(args) -> None:
     if not re.fullmatch(r'[a-z0-9./_-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}', args.studio_image):
         sys.exit('--studio-image must be pinned by digest: <image>[:tag]@sha256:<64 hex>')
     compose = compose.replace('{{STUDIO_IMAGE}}', args.studio_image)
+    if not re.fullmatch(r'(/[A-Za-z0-9._-]+)+', args.projects_host_dir) or '/..' in args.projects_host_dir:
+        sys.exit('--projects-host-dir must be an absolute path of plain names')
+    compose = compose.replace('{{PROJECTS_HOST_DIR}}', args.projects_host_dir)
     raw = base64.b64encode(compose.encode()).decode()
 
     uuid = args.service
@@ -122,6 +129,11 @@ def cmd_deploy(args) -> None:
             'docker_compose_raw': raw,
         })['uuid']
     coolify('PATCH', f'/services/{uuid}', {'connect_to_docker_network': True})
+    # The service's Links: the dashboard. Coolify turns a URL into routes on B's own proxy (not
+    # reachable from the internet; the public route is A -> Kong), so the URL goes on Kong, whose
+    # basic auth guards that host either way, and never on Studio itself.
+    dashboard = f'https://studio.{args.domain_suffix}'
+    coolify('PATCH', f'/services/{uuid}', {'urls': [{'name': 'studio', 'url': ''}, {'name': 'kong', 'url': dashboard}]})
 
     env = read_env(Path(args.file))
     missing = [k for k in GENERATED if k not in env]
@@ -163,6 +175,7 @@ def main() -> None:
     d.add_argument('--service')
     d.add_argument('--projects-environment', default='projects')
     d.add_argument('--domain-suffix', default='supa.example.com')
+    d.add_argument('--projects-host-dir', default='/data/supa-platform-staging/projects')
     args = p.parse_args()
     if args.cmd == 'secrets':
         cmd_secrets(Path(args.file))
