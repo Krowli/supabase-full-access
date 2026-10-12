@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { http, HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { fetchControlPlaneProjects } from './control-plane-registry'
+import { fetchControlPlaneProjects, STACK_SETTINGS } from './control-plane-registry'
 import { mswServer } from '@/tests/lib/msw'
 
 const BASE = 'http://control-plane.test'
@@ -47,6 +49,8 @@ describe('fetchControlPlaneProjects', () => {
         status: 'ACTIVE_HEALTHY',
         insertedAt: '2026-10-12T10:00:00.000Z',
         env: {
+          ...STACK_SETTINGS,
+          GOTRUE_SITE_URL: 'https://aaaaaaaaaaaaaaaaaaaa.pieowl.test',
           POSTGRES_HOST: 'supabase-db-uuidaaaa',
           POSTGRES_PASSWORD: 'db-pass',
           SUPABASE_URL: 'https://aaaaaaaaaaaaaaaaaaaa.pieowl.test',
@@ -77,6 +81,8 @@ describe('fetchControlPlaneProjects', () => {
     )
 
     expect((await fetchControlPlaneProjects(CONFIG))[0].env).toEqual({
+      ...STACK_SETTINGS,
+      GOTRUE_SITE_URL: 'https://cccccccccccccccccccc.pieowl.test',
       SUPABASE_URL: 'https://cccccccccccccccccccc.pieowl.test',
       SUPABASE_PUBLIC_URL: 'https://cccccccccccccccccccc.pieowl.test',
     })
@@ -94,6 +100,8 @@ describe('fetchControlPlaneProjects', () => {
     const [deleting, other] = await fetchControlPlaneProjects(CONFIG)
     expect(deleting.status).toBe('GOING_DOWN')
     expect(deleting.env).toEqual({
+      ...STACK_SETTINGS,
+      GOTRUE_SITE_URL: 'https://ffffffffffffffffffff.pieowl.test',
       SUPABASE_URL: 'https://ffffffffffffffffffff.pieowl.test',
       SUPABASE_PUBLIC_URL: 'https://ffffffffffffffffffff.pieowl.test',
     })
@@ -137,5 +145,24 @@ describe('fetchControlPlaneProjects', () => {
     await expect(fetchControlPlaneProjects(CONFIG)).rejects.toThrow(
       /^control plane GET \/projects failed: /
     )
+  })
+})
+
+describe('STACK_SETTINGS', () => {
+  it('matches what deploy/platform/project-compose.yaml starts each project with', () => {
+    const compose = readFileSync(
+      resolve(__dirname, '../../../../../deploy/platform/project-compose.yaml'),
+      'utf8'
+    )
+    // `  - KEY=value` or `  - 'KEY=value'` lines, the list-style env every service there uses.
+    const started = new Map<string, Set<string>>()
+    for (const [, key, value] of compose.matchAll(/^\s+- '?([A-Z0-9_]+)=([^'\n]*)'?$/gm)) {
+      started.set(key, (started.get(key) ?? new Set()).add(value))
+    }
+    // GoTrue's names are the env names; PostgREST's and storage-api's are spelled the same.
+    for (const [name, value] of Object.entries(STACK_SETTINGS)) {
+      expect([...(started.get(name) ?? [])], name).toEqual([value])
+    }
+    expect(compose).toContain("'GOTRUE_SITE_URL={{PUBLIC_URL}}'")
   })
 })
