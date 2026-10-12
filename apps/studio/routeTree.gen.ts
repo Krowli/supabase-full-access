@@ -18,6 +18,7 @@ import { Route as ClaimProjectRouteImport } from './routes/claim-project'
 import { Route as JoinRouteImport } from './routes/join'
 import { Route as LogoutRouteImport } from './routes/logout'
 import { Route as MaintenanceRouteImport } from './routes/maintenance'
+import { Route as NewProjectRouteImport } from './routes/new-project'
 import { Route as RedeemRouteImport } from './routes/redeem'
 import { Route as StripeAtlasApplicationRouteImport } from './routes/stripe-atlas-application'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
@@ -389,6 +390,11 @@ const LogoutRoute = LogoutRouteImport.update({
 const MaintenanceRoute = MaintenanceRouteImport.update({
   id: '/maintenance',
   path: '/maintenance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NewProjectRoute = NewProjectRouteImport.update({
+  id: '/new-project',
+  path: '/new-project',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RedeemRoute = RedeemRouteImport.update({
@@ -2244,6 +2250,7 @@ export interface FileRoutesByFullPath {
   '/join': typeof JoinRoute
   '/logout': typeof LogoutRoute
   '/maintenance': typeof MaintenanceRoute
+  '/new-project': typeof NewProjectRoute
   '/redeem': typeof RedeemRoute
   '/stripe-atlas-application': typeof StripeAtlasApplicationRoute
   '/verify-email': typeof VerifyEmailRoute
@@ -2581,6 +2588,7 @@ export interface FileRoutesByTo {
   '/join': typeof JoinRoute
   '/logout': typeof LogoutRoute
   '/maintenance': typeof MaintenanceRoute
+  '/new-project': typeof NewProjectRoute
   '/redeem': typeof RedeemRoute
   '/stripe-atlas-application': typeof StripeAtlasApplicationRoute
   '/verify-email': typeof VerifyEmailRoute
@@ -2906,6 +2914,7 @@ export interface FileRoutesById {
   '/join': typeof JoinRoute
   '/logout': typeof LogoutRoute
   '/maintenance': typeof MaintenanceRoute
+  '/new-project': typeof NewProjectRoute
   '/redeem': typeof RedeemRoute
   '/stripe-atlas-application': typeof StripeAtlasApplicationRoute
   '/verify-email': typeof VerifyEmailRoute
@@ -3245,6 +3254,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/logout'
     | '/maintenance'
+    | '/new-project'
     | '/redeem'
     | '/stripe-atlas-application'
     | '/verify-email'
@@ -3582,6 +3592,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/logout'
     | '/maintenance'
+    | '/new-project'
     | '/redeem'
     | '/stripe-atlas-application'
     | '/verify-email'
@@ -3906,6 +3917,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/logout'
     | '/maintenance'
+    | '/new-project'
     | '/redeem'
     | '/stripe-atlas-application'
     | '/verify-email'
@@ -4246,6 +4258,7 @@ export interface RootRouteChildren {
   JoinRoute: typeof JoinRoute
   LogoutRoute: typeof LogoutRoute
   MaintenanceRoute: typeof MaintenanceRoute
+  NewProjectRoute: typeof NewProjectRoute
   RedeemRoute: typeof RedeemRoute
   StripeAtlasApplicationRoute: typeof StripeAtlasApplicationRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
@@ -4438,6 +4451,13 @@ declare module '@tanstack/react-router' {
       path: '/maintenance'
       fullPath: '/maintenance'
       preLoaderRoute: typeof MaintenanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/new-project': {
+      id: '/new-project'
+      path: '/new-project'
+      fullPath: '/new-project'
+      preLoaderRoute: typeof NewProjectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/redeem': {
@@ -7497,6 +7517,7 @@ const rootRouteChildren: RootRouteChildren = {
   JoinRoute: JoinRoute,
   LogoutRoute: LogoutRoute,
   MaintenanceRoute: MaintenanceRoute,
+  NewProjectRoute: NewProjectRoute,
   RedeemRoute: RedeemRoute,
   StripeAtlasApplicationRoute: StripeAtlasApplicationRoute,
   VerifyEmailRoute: VerifyEmailRoute,

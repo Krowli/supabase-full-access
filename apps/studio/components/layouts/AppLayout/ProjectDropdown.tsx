@@ -38,7 +38,8 @@ function ProjectDropdownNewProjectActions({
   embedded,
   onClose,
 }: ProjectDropdownNewProjectActionsProps) {
-  const href = `/new/${organizationSlug}`
+  // Fork: straight to the multi-project Studio's own form (deploy/platform/SPEC.md M6)
+  const href = IS_MULTI_PROJECT ? '/new-project' : `/new/${organizationSlug}`
 
   if (embedded) {
     return (
