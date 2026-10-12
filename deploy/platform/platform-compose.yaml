@@ -15,9 +15,10 @@
 # rest. The aliases are fixed, so there is one platform per server. (Compose also gives each
 # container its short service name there; project stacks name theirs supabase-*.) Inside this stack the short names
 # (kong, realtime, minio, ...) work; project containers are supabase-{db,auth,rest,storage}-<uuid>.
-# Nothing is published except Kong's proxy and the control plane's port on the WireGuard address:
-# the gateway host's Traefik sends *.<PROJECT_DOMAIN_SUFFIX> to Kong, and its sync container
-# (gateway/compose.yaml) reads /hosts (the API itself needs the control-plane token). Studio
+# Nothing is published except on the WireGuard address: Kong's proxy (the gateway host's Traefik
+# sends *.<PROJECT_DOMAIN_SUFFIX> to it), the control plane's port (the gateway's sync container,
+# gateway/compose.yaml, reads /hosts; the API itself needs the control-plane token) and Supavisor's
+# two pooler ports, for apps on the gateway host that use a project's Postgres. Studio
 # (multi-project) is reached only through Kong, at studio.<PROJECT_DOMAIN_SUFFIX> with basic auth
 # (SERVICE_USER_STUDIO / SERVICE_PASSWORD_STUDIO; the control plane renders that route).
 #
@@ -107,6 +108,12 @@ services:
       - 'ERL_AFLAGS=-proto_dist inet_tcp'
       - DB_POOL_SIZE=3
     command: ['/bin/sh', '-c', '/app/bin/migrate && /app/bin/server']
+    # A project's Postgres for apps on the gateway host, as on supabase.com: user <role>.<ref>,
+    # session mode on 6542 (migrations, anything that needs a whole session), transaction mode on
+    # 6543. WireGuard address only.
+    ports:
+      - '10.10.0.1:6542:5432'
+      - '10.10.0.1:6543:6543'
     networks:
       coolify:
         aliases: [supa-platform-supavisor]

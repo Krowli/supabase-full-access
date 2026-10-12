@@ -50,7 +50,12 @@ function adminCaller(service: string, config: AdminApiConfig) {
   }
 }
 
-/** Supavisor: PUT /api/tenants/<ref> upserts. Clients connect as `postgres.<ref>`. */
+/**
+ * Supavisor: PUT /api/tenants/<ref> upserts. Clients connect as `<role>.<ref>` with any role of
+ * the project database, as on supabase.com: `require_user: false` makes Supavisor check the
+ * password with auth_query, run as the manager `pgbouncer` (project-compose sets its password to
+ * the project db password at init). Session mode on port 5432, transaction mode on 6543.
+ */
 export function createSupavisorTenants(config: AdminApiConfig): TenantRegistry {
   const call = adminCaller('Supavisor', config)
   return {
@@ -61,16 +66,17 @@ export function createSupavisorTenants(config: AdminApiConfig): TenantRegistry {
           db_port: 5432,
           db_database: 'postgres',
           ip_version: 'auto',
-          require_user: true,
+          require_user: false,
+          auth_query: 'SELECT * FROM pgbouncer.get_auth($1)',
           upstream_ssl: false,
           enforce_ssl: false,
           default_max_clients: 100,
-          default_pool_size: 5,
+          default_pool_size: 10,
           users: [
             {
-              db_user: 'postgres',
+              db_user: 'pgbouncer',
               db_password: t.dbPassword,
-              pool_size: 5,
+              pool_size: 10,
               mode_type: 'transaction',
               is_manager: true,
             },
