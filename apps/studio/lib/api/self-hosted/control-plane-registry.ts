@@ -54,6 +54,29 @@ const STATUS: Record<string, string> = {
  */
 const DELETING = 'DELETING'
 
+/**
+ * What every project stack starts its GoTrue, storage-api and PostgREST with
+ * (deploy/platform/project-compose.yaml; a test keeps the two in step), mirrored as Studio's
+ * single-project compose mirrors them into its own container (FORK.md). The settings pages open on
+ * these rather than on the services' built-in defaults, and a first save, which renders every
+ * setting into the project's files, keeps them instead of switching, say, phone sign-in off.
+ * `GOTRUE_SITE_URL` is the project's public URL, added per project.
+ */
+export const STACK_SETTINGS: Readonly<Record<string, string>> = {
+  GOTRUE_DISABLE_SIGNUP: 'false',
+  GOTRUE_JWT_EXP: '3600',
+  GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true',
+  GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: 'false',
+  GOTRUE_MAILER_AUTOCONFIRM: 'false',
+  GOTRUE_EXTERNAL_PHONE_ENABLED: 'true',
+  GOTRUE_SMS_AUTOCONFIRM: 'true',
+  UPLOAD_FILE_SIZE_LIMIT: '524288000',
+  ENABLE_IMAGE_TRANSFORMATION: 'true',
+  PGRST_DB_SCHEMAS: 'public,storage,graphql_public',
+  PGRST_DB_MAX_ROWS: '1000',
+  PGRST_DB_EXTRA_SEARCH_PATH: 'public',
+}
+
 /** A control-plane status as the dashboard knows it. */
 export const platformStatus = (status: string): string => STATUS[status] ?? 'UNKNOWN'
 
@@ -170,6 +193,8 @@ export async function fetchControlPlaneProjects(
     projects.map(async (project) => {
       const publicUrl = `https://${project.ref}.${config.domainSuffix}`
       const env: Record<string, string> = {
+        ...STACK_SETTINGS,
+        GOTRUE_SITE_URL: publicUrl,
         SUPABASE_URL: publicUrl,
         SUPABASE_PUBLIC_URL: publicUrl,
       }

@@ -43,6 +43,7 @@ import { useLints } from '@/hooks/misc/useLints'
 import { useLocalStorageQuery } from '@/hooks/misc/useLocalStorage'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import { useTrack } from '@/lib/telemetry/track'
 import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
 
@@ -467,7 +468,11 @@ const OrganizationLinks = () => {
   return (
     <SidebarGroup className="gap-0.5">
       <SidebarMenu className="flex flex-col gap-1">
-        {navMenuItems.map((item, i) => (
+        {/* Fork: the platform's one organization has no team, integrations, usage, billing or settings. */}
+        {(IS_MULTI_PROJECT
+          ? navMenuItems.filter(({ key }) => key === 'projects')
+          : navMenuItems
+        ).map((item, i) => (
           <SideBarNavLink
             key={item.key}
             active={

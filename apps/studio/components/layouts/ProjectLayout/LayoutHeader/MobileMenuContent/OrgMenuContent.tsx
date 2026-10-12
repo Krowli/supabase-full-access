@@ -19,6 +19,7 @@ import { orgItemHasSubmenu, useOrgMenuNavigation } from './useOrgMenuNavigation'
 import { ICON_SIZE, ICON_STROKE_WIDTH } from '@/components/interfaces/Sidebar'
 import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import { getPathnameWithoutQuery } from '@/lib/pathname.utils'
 import { useTrack } from '@/lib/telemetry/track'
 
@@ -146,7 +147,10 @@ export function OrgMenuContent({ onCloseSheet }: OrgMenuContentProps) {
         <nav className="flex flex-col gap-2 p-1" aria-label="Organization menu">
           <SidebarMenu>
             <SidebarGroup className="gap-0.5">
-              {navMenuItems.map((item, i) => (
+              {(IS_MULTI_PROJECT
+                ? navMenuItems.filter(({ key }) => key === 'projects')
+                : navMenuItems
+              ).map((item, i) => (
                 <OrgMenuItem
                   key={item.key}
                   item={item}

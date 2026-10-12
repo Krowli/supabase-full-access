@@ -7,6 +7,7 @@ import { createMocks, type RequestMethod } from 'node-mocks-http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import orgProjectsHandler from '../../../../pages/api/platform/organizations/[slug]/projects'
+import queryHandler from '../../../../pages/api/platform/pg-meta/[ref]/query/index'
 import profileHandler from '../../../../pages/api/platform/profile/index'
 import projectHandler from '../../../../pages/api/platform/projects/[ref]/index'
 import settingsHandler from '../../../../pages/api/platform/projects/[ref]/settings'
@@ -289,12 +290,24 @@ describe('with the control plane as the registry', () => {
     expect(projects.map(({ ref }: { ref: string }) => ref)).toEqual([REF])
   })
 
-  it('refuses its database until its stack exists', async () => {
+  it('answers its database reads 503 "not ready yet" until its stack exists', async () => {
     const res = await call(settingsHandler, { query: { ref: REF } })
-    expect(res._getStatusCode()).toBe(500)
+    expect(res._getStatusCode()).toBe(503)
+    expect(res.getHeader('Retry-After')).toBe('5')
     expect(res._getJSONData()).toEqual({
-      error: { message: `Project ${REF} is not ready (COMING_UP): it has no POSTGRES_HOST yet` },
+      error: {
+        message: `Project ${REF} is not ready yet (COMING_UP): its stack is still being set up and has no POSTGRES_HOST. Try again in a few seconds`,
+      },
     })
+
+    const { req, res: queryRes } = createMocks({
+      method: 'POST',
+      query: { ref: REF },
+      body: { query: 'select 1' },
+    })
+    await queryHandler(req as unknown as NextApiRequest, queryRes as unknown as NextApiResponse)
+    expect(queryRes._getStatusCode()).toBe(503)
+    expect(queryRes._getJSONData().error.message).toMatch(/not ready yet \(COMING_UP\)/)
   })
 
   describe('on a platform stack, where no stack backs default (STUDIO_DEFAULT_PROJECT=none)', () => {

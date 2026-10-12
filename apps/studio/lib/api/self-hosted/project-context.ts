@@ -189,6 +189,21 @@ export class ProjectContextError extends Error {
   }
 }
 
+/**
+ * The project exists but has no stack to read yet (still being set up) or any more (being deleted).
+ * A request that reaches one of its backends is answered 503: "not yet", not a failure.
+ */
+export class ProjectNotReadyError extends ProjectContextError {
+  constructor(ref: string, status: string, name: string) {
+    super(
+      status === 'GOING_DOWN'
+        ? `Project ${ref} is not ready (${status}): it is being deleted, so it has no ${name}`
+        : `Project ${ref} is not ready yet (${status}): its stack is still being set up and has no ${name}. Try again in a few seconds`
+    )
+    this.name = 'ProjectNotReadyError'
+  }
+}
+
 export class ProjectNotFoundError extends ProjectContextError {
   constructor(ref: string) {
     super(`Project ${ref} not found`)
@@ -395,7 +410,8 @@ function requestRef(req: NextApiRequest): string | undefined {
  * Runs an API handler as the project its request names. Called by `apiWrapper` for every route.
  *
  * A request that names no project runs without one; any reader it reaches throws rather than
- * picking `default`. A request that names a project the registry does not hold is a 404.
+ * picking `default`. A request that names a project the registry does not hold is a 404, and one
+ * whose project has no stack yet (`ProjectNotReadyError`) is a 503 with `Retry-After`.
  */
 export async function withProjectContext<T>(
   req: NextApiRequest,
@@ -414,7 +430,13 @@ export async function withProjectContext<T>(
     if (!(error instanceof ProjectNotFoundError)) throw error
     return res.status(404).json({ error: { message: error.message } })
   }
-  return storage.run(project, fn)
+  try {
+    return await storage.run(project, fn)
+  } catch (error) {
+    if (!(error instanceof ProjectNotReadyError) || res.headersSent) throw error
+    res.setHeader('Retry-After', '5')
+    return res.status(503).json({ error: { message: error.message } })
+  }
 }
 
 function currentProject(): ResolvedProject {
@@ -466,10 +488,9 @@ export function projectEnv(name: ProjectEnvName): string | undefined {
 
   const value = project.env[name] ?? DERIVED_ENV[name]?.(project.ref, project.projectsDir)
   if (value === undefined && isRequiredEnv(name)) {
+    if (!isDefault) throw new ProjectNotReadyError(project.ref, project.status, name)
     throw new ProjectContextError(
-      isDefault
-        ? `Project default has no stack here (STUDIO_DEFAULT_PROJECT=none): open one of the platform's projects`
-        : `Project ${project.ref} is not ready (${project.status}): it has no ${name} yet`
+      `Project default has no stack here (STUDIO_DEFAULT_PROJECT=none): open one of the platform's projects`
     )
   }
   return value
