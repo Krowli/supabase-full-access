@@ -845,3 +845,391 @@ existing `import/no-anonymous-default-export` on the two upstream route files, o
 building screen and then the project home; the project is in the dropdown and its Table Editor
 works) needs a Studio image built with `multi_project: true`, the platform stack with the control
 plane (M4/M5) and wildcard DNS for `<ref>.<suffix>`.
+
+> Sections 13-14 were written on branch `platform/cp-service` (control plane) in parallel with
+> 9-12 (Studio) and renumbered when the branches were merged.
+
+## 13. M4 status (2026-10-12, branch `platform/cp-service`)
+
+**What exists.**
+
+- `deploy/platform/project-compose.yaml`: the per-project stack, `supabase-db`, `supabase-auth`,
+  `supabase-rest` and `supabase-storage`, with the same images and settings as
+  `deploy/coolify/docker-compose.yaml`. The db gets the project-level init SQL as content mounts
+  (`webhooks.sql`, `roles.sql`, `jwt.sql`, copied from `docker/volumes/db/`, and a unit test
+  keeps the copies identical). The platform-level ones (`_supabase`, `realtime`, `pooler`,
+  `logs`) belong to the shared stack and are left out. No ports are published.
+  - `{{REF}}`, `{{PUBLIC_URL}}` and the storage target are rendered into the text before
+    upload.
+  - The secrets are Coolify env vars (`${PROJECT_DB_PASSWORD}`, `${PROJECT_JWT_SECRET}`,
+    `${PROJECT_ANON_KEY}`, `${PROJECT_SERVICE_KEY}`, `${S3_ACCESS_KEY}`, `${S3_SECRET_KEY}`), so
+    they never appear in the compose Coolify stores.
+- `apps/control-plane`: a Node 24 service in TypeScript that Node runs directly (type
+  stripping), with no framework (`node:http`) and one runtime dependency (`pg`).
+  - `src/secrets.ts`: the ref (20 lowercase letters), passwords, HS256 anon and service_role keys
+    (`iss: supabase`, `ref`, 10-year expiry), and AES-256-GCM with ref and column as associated
+    data.
+  - `src/registry.ts`: schema `_platform`, tables `projects` and `project_secrets` (every secret
+    column is ciphertext). The migration runs on start, is idempotent, and holds an advisory lock.
+  - `src/coolify.ts`: the seven Coolify calls the provisioner makes.
+  - `src/provisioner.ts`: the state machine.
+  - `src/server.ts`: the HTTP API.
+  - `Dockerfile`: build it from the repo root.
+
+**Provisioning steps.** Each step checks what already exists, so running it again finishes a
+run that stopped part-way:
+
+1. Status `CREATING`.
+2. Find the Coolify service named `<ref>` in the configured environment, or create it
+   (`POST /services`, `instant_deploy: false`). The uuid is saved.
+3. `PATCH connect_to_docker_network: true`.
+4. `PATCH /services/{uuid}/envs/bulk`. This upserts, so keys Coolify made while parsing are
+   overwritten.
+5. Status `COMING_UP`. `POST /start`, unless Coolify already reports `running|starting`.
+6. Poll `GET /services/{uuid}` every 5 s until `status == running:healthy`. The timeout is
+   `PROVISION_TIMEOUT_SECONDS`, default 600.
+7. Status `ACTIVE_HEALTHY`. Any error gives `FAILED` with `last_error`.
+
+On start, the service resumes every `CREATING` or `COMING_UP` row. `FAILED` waits for an
+explicit retry.
+
+Looking the service up by name is what stops duplicates: if the process dies after Coolify
+created the service but before the uuid was saved, the next run adopts that service instead of
+creating another.
+
+Delete sends `DELETE /services/{uuid}?delete_configurations&delete_volumes&docker_cleanup&delete_connected_networks`
+(all `true`) for the saved uuid and for any service found by name, then deletes the registry
+rows. Coolify answers 404 for the service at once and removes the containers about 7-40 s later.
+
+**HTTP API.** Every route needs `Authorization: Bearer $CONTROL_PLANE_TOKEN`, except `/health`.
+
+| Route | Result |
+|---|---|
+| `POST /projects {name}` | 201, the project in `CREATING`; provisioning continues in the background |
+| `POST /projects {ref}` | 202; re-runs provisioning of an existing project |
+| `GET /projects`, `GET /projects/:ref` | No secrets. Includes `endpoint` (`https://<ref>.<suffix>`) and the internal hosts `supabase-{db,auth,rest,storage}-<uuid>` |
+| `GET /projects/:ref/secrets` | `db_password`, `jwt_secret`, `anon_key`, `service_key`, for Studio's resolver (M1) |
+| `DELETE /projects/:ref` | 200; 409 while a provisioning run is in flight |
+| `GET /health` | 200 when the registry answers |
+
+**Config (env).**
+
+- Required:
+  - Coolify: `COOLIFY_URL` (including `/api/v1`), `COOLIFY_TOKEN`, `COOLIFY_PROJECT_UUID`,
+    `COOLIFY_ENVIRONMENT`, `COOLIFY_SERVER_UUID`.
+  - `REGISTRY_DATABASE_URL`.
+  - `PLATFORM_SECRETS_KEY`: 32 bytes, as hex or base64, for example `openssl rand -base64 32`.
+  - `CONTROL_PLANE_TOKEN`, `PROJECT_DOMAIN_SUFFIX`.
+- Storage: `PROJECT_STORAGE_BACKEND` is `s3` (the default and the target) or `file`.
+  - With `s3`, `PROJECT_S3_ENDPOINT`, `PROJECT_S3_ACCESS_KEY` and `PROJECT_S3_SECRET_KEY` are
+    required, and `PROJECT_S3_REGION` defaults to `us-east-1`. The bucket is the ref.
+  - `file` keeps objects in the project's `storage-data` volume. It is for testing only, until
+    MinIO is shared.
+- Optional: `PORT` (default 8080), `PROVISION_TIMEOUT_SECONDS`, `PROJECT_TEMPLATE_PATH`.
+
+**How to run.**
+
+```bash
+cd apps/control-plane
+NODE_ENV=development npm ci          # the shell may export NODE_ENV=production, which skips dev deps
+npm test                             # unit tests; registry tests also run if TEST_DATABASE_URL is set
+npm run typecheck
+npm run test:live                    # by hand only: real Coolify, server B, local Docker
+docker build -f apps/control-plane/Dockerfile -t control-plane .   # from the repo root
+```
+
+It is a standalone npm package (its own `package-lock.json`). A one-line exclusion in
+`pnpm-workspace.yaml` keeps it out of the pnpm workspace, so `pnpm-lock.yaml` and the daily
+upstream merge are untouched (FORK.md, "Updating from upstream").
+
+**Test results.**
+
+- **Unit tests: 37 pass** (vitest 5): 10 secrets, 6 template, 11 provisioner state machine with
+  an in-memory Coolify, 4 HTTP, and 3 registry against a throwaway Postgres 17. Without
+  `TEST_DATABASE_URL` it is 34 passed and 3 skipped. `tsc --noEmit` is clean.
+- **Live: 3 of 3 pass.** Run with `test/provision.live.test.ts` against Coolify 4.4.6 and
+  server B, in the temporary Coolify project "Tests", environment "control-plane". The registry
+  was a local Docker Postgres. Second run, timings:
+
+  | Scenario | Result |
+  |---|---|
+  | HTTP create to `ACTIVE_HEALTHY` | **18 s** (CREATING → COMING_UP → ACTIVE_HEALTHY). Coolify calls took about 1.3 s; the rest was containers starting and the health poll. All four images were already cached on B. |
+  | Checks from the `coolify` network on B (`docker run --network coolify curlimages/curl`) | PostgREST `/` with the project anon key: 200. With a key signed by another secret: 401. GoTrue `/health`: 200. storage `/bucket` with the service key: 200. |
+  | Server SIGKILLed right after the Coolify service was created | Registry `CREATING`, Coolify `exited`. On restart it resumed on its own (plus `POST {ref}`) and reached `ACTIVE_HEALTHY` in **12 s** with the same uuid. 1 Coolify service named ref. |
+  | Coolify created the service, but the uuid was never saved (fault injected in the client) | `FAILED`, uuid `null`. The re-run found the service by name and reached `ACTIVE_HEALTHY` in **12 s**. Still 1 service. |
+  | Delete | Coolify `GET` gives 404 at once. On B, the 4 containers, 5 volumes and 1 network were gone 7-39 s later. |
+
+  After the run, the "Tests" project was deleted. B has no containers, volumes, networks or
+  `/data/coolify/services/<uuid>` directories from the test, and the local registry container
+  is removed.
+
+**Deviations from §4.**
+
+- `coolify_service_uuid` lives in `projects`, not `project_secrets`. It is not a secret, and
+  `GET /projects/:ref` needs it.
+- `instant_deploy` is `false`, not `true`. The env vars must be set before the first start;
+  otherwise the stack would first boot without its secrets.
+- Image transformations are off in project storage (`ENABLE_IMAGE_TRANSFORMATION=false`) until
+  the shared imgproxy exists.
+- S3 is the target, but the live test used the `file` backend, because no shared MinIO exists
+  yet. The S3 path is covered only by the template tests.
+- GoTrue's `--config-dir /etc/gotrue` and storage's `/etc/studio-config` are per-service named
+  volumes for now. M3 swaps them for the `/data/pieowl/projects/<ref>/…` binds.
+- Runs are serialised per ref inside one process, so run exactly one control-plane instance.
+
+**What M5 needs (not part of M4).**
+
+- Register the tenant in the shared stack after `ACTIVE_HEALTHY`:
+  - Supavisor `PUT /api/tenants/<ref>`;
+  - Realtime `POST /api/tenants`;
+  - the Kong declarative entry (routes by `hosts: [<ref>.<suffix>]`, `key-auth` consumers for
+    the anon and service keys, an `acl` group per ref), with `kong config parse` before every
+    `kong reload`.
+
+  The bodies are in `spike/register.sh` and `spike/kong-test.sh`. Make each one a further
+  idempotent step after `ACTIVE_HEALTHY`, or a new status such as `REGISTERING`, and undo them
+  in delete.
+- Create a MinIO bucket `<ref>` and a scoped key. Then set `PROJECT_STORAGE_BACKEND=s3` and
+  point `PROJECT_S3_*` at the shared MinIO.
+- Set `IMGPROXY_URL` to the shared imgproxy and turn transformations back on.
+- Deploy the control plane itself as a Coolify service. It needs `connect_to_docker_network`,
+  the registry in the shared `_supabase` database, and an admin JWT secret for the Supavisor and
+  Realtime calls.
+- Cap the number of projects per server (§6 risk 7). B had about 3.2 GB available. The memory
+  one project stack uses was not measured.
+
+## 14. M5 status (2026-10-12, branch `platform/cp-service`)
+
+Numbered 12 because `platform/control-plane` already has §10 (decisions) and §11 (M2/M3).
+
+**Architecture as deployed (staging).**
+
+```
+internet ─ *.supa.example.com (DNS → server A)
+  └─ Traefik on A (coolify-proxy), file /data/coolify/proxy/dynamic/supa-platform-staging.yaml
+       HostRegexp(`^[a-z0-9-]+\.supa\.example\.com$`), TLS letsencrypt (HTTP-01, one cert per host)
+       └─ http://10.10.0.1:8010 (WireGuard) ─ server B
+            Coolify service "platform" (deploy/platform/platform-compose.yaml), on `coolify` network
+              kong (3.9.1, DB-less)   proxy 8000 → published 10.10.0.1:8010; admin 8001 unpublished
+              supavisor, realtime, postgres-meta, imgproxy, minio, platform-db (postgres:17-alpine)
+              control-plane          8080 → published 10.10.0.1:8011 (for A's /hosts poll)
+            Coolify services "<ref>" (project-compose.yaml), environment "projects", on `coolify`
+              supabase-db / -auth / -rest / -storage  (reached as <service>-<project-uuid>)
+```
+
+- **Kong** routes per project host `<ref>.supa.example.com`, following
+  `docker/volumes/api/kong.yml`: auth (open: verify, callback, authorize, jwks, SAML acs and
+  metadata, `/.well-known/oauth-authorization-server`; keyed: `/auth/v1/`), `/rest/v1/`,
+  `/graphql/v1`, `/realtime/v1/` (websocket, `preserve_host` so Realtime picks the tenant from
+  the host), `/realtime/v1/api` (keyed; `api/openapi` and `api/tenants` blocked with 403) and
+  `/storage/v1/` (no key-auth, as in the fork; storage checks the JWT). Two `key-auth`
+  consumers per project (`<ref>-anon`, `<ref>-service_role`) in ACL groups `<ref>-anon` and
+  `<ref>-admin`; keyed routes allow only those two groups. No `/pg/` route (Studio talks to
+  pg-meta inside the network) and no dashboard route (Studio comes after M2).
+- **Kong config ownership** (`apps/control-plane/src/kong.ts`). The control plane renders the
+  whole declarative config from the registry on every change (every project that has a Coolify
+  service and is not `DELETING`), refuses to render values that do not look right (ref,
+  uuid, JWT shape), and applies it with `POST /config`. Kong validates the whole config and
+  swaps it atomically, or answers 400 and keeps serving the old one (checked on B: an invalid
+  service gave 400 and the hash did not change). Applies are serialised. The last accepted
+  config and Kong's hash of it are kept in memory; every 15 s the control plane compares
+  Kong's `configuration_hash` (`GET /status`) and re-applies on any difference. If the
+  registry cannot be rendered then, it re-applies the last good config.
+  - A plain `docker restart` keeps Kong's config (DB-less Kong keeps it in LMDB inside the
+    container). A recreate (any Coolify redeploy or restart) starts Kong empty; the control
+    plane restores it (measured below).
+- **Kong admin API guard.** The admin API listens on the container networks only, but the
+  `coolify` network is shared with every Coolify service on B (Pieowl and ProjectB included).
+  So it answers only requests with the header `x-admin-token: $KONG_ADMIN_TOKEN`: the Kong
+  entrypoint writes an nginx `if` into the admin server block (`KONG_NGINX_ADMIN_INCLUDE`).
+  From the `coolify` network without the header: 401.
+- **Supavisor and Realtime** (`src/tenants.ts`): tenant `<ref>`, db host
+  `supabase-db-<project-uuid>`, the M0 bodies (`spike/register.sh`). Supavisor `PUT` upserts;
+  Realtime is `GET`, then `POST` when missing. Teardown is `DELETE` (404 counts as done). Admin
+  tokens are HS256, 5 min, signed with `PLATFORM_ADMIN_JWT_SECRET` (both services' `API_JWT_SECRET`).
+- **MinIO** (`src/minio.ts`): bucket `<ref>` plus a **scoped service account**: access key
+  (20 chars) and secret (40) are generated with the project and stored encrypted in
+  `project_secrets` (`s3_access_key`, `s3_secret_key`); the account's policy allows `s3:*` on
+  `arn:aws:s3:::<ref>` and `<ref>/*` only. MinIO's admin API encrypts its payloads (madmin), so
+  the control plane image bundles `mc` (copied from the same MinIO image the fork uses) and
+  drives it with `MC_HOST_platform`; stdout (which echoes the secret) is never logged. Teardown
+  removes the account and `rb --force`s the bucket. Project stacks always use S3 now; the
+  `file` backend and `storage-data` volume are gone from `project-compose.yaml`.
+- **imgproxy** is shared; project storage gets `ENABLE_IMAGE_TRANSFORMATION=true` and
+  `IMGPROXY_URL=http://imgproxy-<platform-uuid>:8080`. Sources are presigned MinIO URLs, so
+  imgproxy has no local filesystem access (the fork sets `IMGPROXY_LOCAL_FILESYSTEM_ROOT=/`).
+- **postgres-meta** is shared; its default connection points at `127.0.0.1:1`, so only requests
+  with Studio's `x-connection-encrypted` header (key `PG_META_CRYPTO_KEY`) reach a database.
+- **Provisioning steps** (`src/provisioner.ts`). The registry has a new `step` column (the step
+  that ran last; with `FAILED`, the one that failed) and a new status `DELETING`.
+  - `CREATING`: `coolify_service`, `network`, `storage`, `envs`.
+  - `COMING_UP`: `start`, `health`, `pooler`, `realtime`, `gateway`.
+  - Then `ACTIVE_HEALTHY` with `step = null`. Any error gives `FAILED`, `step` and
+    `last_error`; `POST /projects {ref}` re-runs every step, each of which checks what exists.
+  - Delete: status `DELETING`, then `gateway` (the project leaves the Kong config first, so
+    traffic stops), `realtime`, `pooler`, `coolify_service`, `storage`, then the registry rows.
+    A failure leaves `DELETING` with `step` and `last_error`; `DELETE` again continues.
+    `provision()` does nothing for a `DELETING` project.
+- **New HTTP route**: `GET /hosts` (no token): the public hostnames of the projects Kong routes,
+  one per line. Server A polls it for certificates (below).
+
+**Deviations from the M5 brief.**
+
+1. **TLS: `HostRegexp` alone gets no certificate.** Traefik's ACME resolver only requests
+   certificates for `Host()`/`HostSNI()` matchers or `tls.domains`, and a wildcard needs a DNS
+   challenge (Traefik docs, "Domain Definition"); A's resolver is HTTP-01 only. So the router
+   matches with the requested `HostRegexp` and lists each project host in `tls.domains`. The
+   list comes from a systemd timer on A (`supa-platform-staging-sync.timer`, every 15 s) that
+   reads `http://10.10.0.1:8011/hosts`, keeps only `^[a-z]{20}\.supa\.example\.com$` names, and
+   renders the file itself (files: `deploy/platform/gateway/`). If `/hosts` is unreachable the
+   file stays. New hosts had a valid certificate 0-5 s after `ACTIVE_HEALTHY`. Each project
+   uses one Let's Encrypt certificate (limit: 50 per registered domain per week).
+2. **The image could not be built by GitHub Actions.** `.github/workflows/control-plane-publish.yml`
+   exists on this branch (dispatch only; tags `<branch>`, `sha-<full sha>`, `latest` only on
+   `main`), but `gh workflow run` answers `HTTP 404: workflow control-plane-publish.yml not found
+   on the default branch`: GitHub only dispatches workflows that exist on the default branch, and
+   `main` is off-limits here. So the image was built on B from a `git archive` tarball of
+   `71df7905` (`docker build -f apps/control-plane/Dockerfile -t
+   ghcr.io/krowli/supabase-control-plane:sha-71df7905279762b39c9ba991a674a387e8255db4 .`), and
+   the compose uses `pull_policy: missing`. Package visibility was not touched (the package does
+   not exist yet). When the workflow reaches `main`, dispatch it with
+   `--ref platform/cp-service`; the repo is public, so GHCR should inherit public visibility
+   **[assumption: check with an anonymous `docker manifest inspect` on B]**.
+3. **No MinIO bootstrap container.** The control plane creates buckets and keys per project.
+4. **`/rest/v1/` (OpenAPI root) accepts the anon key**, as in M0 and as the brief's check expects.
+   Upstream's `kong.yml` restricts the root to the service key (expression route). If that matters,
+   add the same restriction in `renderKongConfig` and change the check.
+5. **Project stacks live in a second environment** (`projects`) of the same Coolify project, so the
+   platform service and project services are not mixed.
+6. **The M4 live test (`test/provision.live.test.ts`) was removed.** It ran the control plane
+   without shared services, which M5 makes required; `deploy/platform/verify.py` replaces it and
+   covers the full path against the deployed stack. Crash-resume stays covered by the unit tests.
+7. **Coolify passes every service env var to every container of the stack** (an `.env` file for
+   all services; seen with `docker inspect`), so Kong, MinIO and imgproxy also hold
+   `CP_COOLIFY_TOKEN`, `MINIO_ROOT_PASSWORD` and the rest. The fork's Supabase stack has the same
+   property. The Coolify-related variables are prefixed `CP_` because Coolify sets its own
+   `COOLIFY_*` names in the same environment.
+
+**Staging deployment.**
+
+| What | Value |
+|---|---|
+| Coolify project "Platform (staging)" | `ipffkzbu5u5y7qjtxtbbxi58` |
+| Environment of the platform stack | `staging` (`uisxxkoyuhokuz2c2ertumf2`) |
+| Environment for project stacks | `projects` (`q1hlthspouol7bscyvybe1wd`) |
+| Platform service "platform" | `<uuid>`, server db-b `l6kmhkc8cr107te5xkqs9ese`, `connect_to_docker_network: true` |
+| Control-plane image | `ghcr.io/krowli/supabase-control-plane:sha-71df7905279762b39c9ba991a674a387e8255db4` (built on B) |
+| Public gateway | `https://<ref>.supa.example.com` → A Traefik → `10.10.0.1:8010` |
+| Control plane (internal) | `http://control-plane-<uuid>:8080` on `coolify`; `10.10.0.1:8011` on WireGuard |
+| Secrets file | `/tmp/platform-staging.env` on the operator's Mac, mode 600 (generated by `deploy.py secrets`) |
+
+The secrets file is the only copy outside Coolify. `/tmp` does not survive a reboot of the Mac:
+move it somewhere durable (or read the values back from Coolify's env UI) before relying on it.
+
+Env names of the platform service (values in the secrets file and Coolify):
+`PLATFORM_DB_PASSWORD`, `PLATFORM_ADMIN_JWT_SECRET`, `SUPAVISOR_SECRET_KEY_BASE`,
+`SUPAVISOR_VAULT_ENC_KEY`, `REALTIME_SECRET_KEY_BASE`, `REALTIME_DB_ENC_KEY`, `PG_META_CRYPTO_KEY`,
+`MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `KONG_ADMIN_TOKEN`, `CONTROL_PLANE_TOKEN`,
+`PLATFORM_SECRETS_KEY`, `CP_COOLIFY_URL`, `CP_COOLIFY_TOKEN` (the operator's Coolify token, from
+`~/.coolify-token`), `CP_COOLIFY_PROJECT_UUID`, `CP_COOLIFY_ENVIRONMENT` (`projects`),
+`CP_COOLIFY_SERVER_UUID`, `PROJECT_DOMAIN_SUFFIX` (`supa.example.com`), `PROJECT_S3_ENDPOINT`
+(`http://minio-<platform-uuid>:9000`), `PROJECT_IMGPROXY_URL` (`http://imgproxy-<platform-uuid>:8080`).
+Control-plane env added in M5: `KONG_ADMIN_URL`, `KONG_ADMIN_TOKEN`, `SUPAVISOR_URL`,
+`REALTIME_URL`, `PLATFORM_ADMIN_JWT_SECRET`, `MINIO_URL`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`,
+`PROJECT_S3_ENDPOINT`, `PROJECT_IMGPROXY_URL` (the compose sets the URLs to the stack's short
+names). Removed: `PROJECT_STORAGE_BACKEND`, `PROJECT_S3_ACCESS_KEY`, `PROJECT_S3_SECRET_KEY`.
+
+**How to redeploy.**
+
+```bash
+# 1. An image for the new commit: the workflow (once it is on main), or on B:
+git archive --format=tar HEAD apps/control-plane deploy/platform/project-compose.yaml | gzip > /tmp/cp.tgz
+scp -o ProxyJump=root@203.0.113.10 /tmp/cp.tgz root@10.10.0.1:/tmp/
+ssh -J root@203.0.113.10 root@10.10.0.1 'mkdir /tmp/cp-src && tar -xzf /tmp/cp.tgz -C /tmp/cp-src && cd /tmp/cp-src &&
+  docker build -f apps/control-plane/Dockerfile -t ghcr.io/krowli/supabase-control-plane:sha-<sha> . && rm -rf /tmp/cp-src /tmp/cp.tgz'
+# 2. Push the compose with the tag, re-apply the env, restart:
+deploy/platform/deploy.py deploy /tmp/platform-staging.env --project ipffkzbu5u5y7qjtxtbbxi58 \
+  --environment staging --server l6kmhkc8cr107te5xkqs9ese --tag sha-<sha> --service <uuid>
+# 3. Check end to end (creates and deletes one project):
+deploy/platform/verify.py /tmp/platform-staging.env --platform <uuid>
+```
+
+Gateway host (A): `deploy/platform/gateway/supa-platform-sync.sh` is installed as
+`/usr/local/bin/supa-platform-staging-sync`, with the `.service` and `.timer` units in
+`/etc/systemd/system/`. Removing the staging gateway: `systemctl disable --now
+supa-platform-staging-sync.timer`, delete the three files and
+`/data/coolify/proxy/dynamic/supa-platform-staging.yaml`.
+
+**Test results.**
+
+- **Unit tests: 51 pass** (vitest 5), with the registry tests against a throwaway Postgres 17
+  on B through an SSH tunnel; `tsc --noEmit` clean. New: Kong rendering (host scoping, per-project
+  ACLs, consumers, Realtime host preservation, injection guards) and `KongGateway` against an
+  in-memory admin API (rejected config keeps the old one; reconcile restores after an empty
+  restart, from the registry or from the last good config); provisioner steps for every shared
+  service failing once and a re-run finishing; delete undoing everything, and a failed delete
+  staying `DELETING` and finishing on the next call; `/hosts`; MinIO key limits.
+- **Live (`verify.py`, third run, 2026-10-11 23:55 UTC): 29 of 29 pass.** Earlier runs: the first
+  failed only because Coolify removed the service directory after the check ran (the check now
+  waits); the second used `docker compose --force-recreate kong` outside Coolify, which leaves
+  Kong off the `coolify` network (Coolify attaches it itself), so the check now restarts the
+  service through the Coolify API.
+
+  | Check | Result |
+  |---|---|
+  | `POST /projects` → `ACTIVE_HEALTHY` (all steps, images cached) | 201, **20-21 s** |
+  | TLS certificate for `<ref>.supa.example.com` | valid 0-5 s after `ACTIVE_HEALTHY` |
+  | `/rest/v1/` anon key / foreign key / no key | 200 / 401 / 401 |
+  | `/auth/v1/health` | 200 |
+  | Storage: create bucket, upload, download (service key) | 200, 200, bytes match |
+  | Storage image transform (`/render/image/authenticated/…?width=16`) | 200 (shared imgproxy) |
+  | Object in MinIO bucket `<ref>` | `<ref>/m5/hello.txt/<version>` present |
+  | Project S3 key: own bucket / another bucket | allowed / denied |
+  | `psql` via Supavisor `supavisor-<uuid>:6543` as `postgres.<ref>` | reaches the project db (its `authenticator` and `supabase_admin` roles) |
+  | `wss://<ref>…/realtime/v1/websocket?apikey=<anon>&vsn=1.0.0` / foreign key | 101 / 401 |
+  | Coolify restart of the whole platform stack | routes back after **13 s**; the new control plane logged `kong.drift` and re-applied |
+  | Delete | 200; registry 404; Supavisor and Realtime tenants 404; Kong 0 services; `/hosts` empty; public URL 404; bucket and service account gone; containers gone after ~20 s; no volumes, networks or service directory |
+
+**RAM** (`docker stats`, steady state, idle, MB):
+
+| Platform stack | | Project stack | |
+|---|---|---|---|
+| kong | 112-125 | supabase-storage | 220 |
+| realtime | 180-189 | supabase-db | 88-89 |
+| supavisor | 168-171 | supabase-rest | 22-28 |
+| minio | 79-210 | supabase-auth | 9 |
+| postgres-meta | 108-144 | | |
+| platform-db | 41-51 | | |
+| control-plane | 36-42 | | |
+| imgproxy | 15-17 | | |
+| **total** | **~800-890** | **total** | **~260-350** |
+
+B had 2.85 GB available before the platform stack and 2.3-2.4 GB with it running (read before
+and after each verify run). So, at idle, B fits about 5 projects at ~350 MB each before the
+500 MB floor; real load and Postgres caches will cut that.
+storage-api is the largest per-project cost.
+
+**State at the end.** The platform stack is running (`running:healthy`), with no projects: the
+registry is empty, MinIO has no buckets or service accounts, the `projects` environment has no
+services, and the Traefik file lists no domains. Kong answers 404 for any `*.supa.example.com`.
+Test-only leftovers removed: the throwaway Kong and Postgres containers and one anonymous volume.
+
+**What M6 needs.**
+
+- Get `control-plane-publish.yml` onto `main` (or decide to keep building on B) and switch the
+  platform compose to a pulled image; confirm anonymous pull of the GHCR package from B.
+- Studio in the platform stack (after M2): `STUDIO_PROJECT_REGISTRY_URL=http://control-plane:8080`
+  and `STUDIO_PROJECT_REGISTRY_TOKEN=$CONTROL_PLANE_TOKEN`, pg-meta at `http://postgres-meta:8080`
+  with `PG_META_CRYPTO_KEY` (already in the stack env), `PLATFORM_ADMIN_JWT_SECRET` for the
+  Supavisor/Realtime admin calls, and a Kong (or Traefik) route for the dashboard with basic auth.
+  The registry reader on `platform/control-plane` maps unknown statuses to `UNKNOWN`; map
+  `DELETING` (new here) explicitly, and `step`/`last_error` can drive BuildingState's message.
+- Studio's local `POST /platform/projects` → control plane `POST /projects`; poll
+  `GET /projects/<ref>` until `ACTIVE_HEALTHY` (about 20 s with cached images).
+- A dedicated Coolify API token for the control plane (it now uses the operator's token, which
+  can touch every project, Pieowl and ProjectB included), and a cap on projects per server (§6
+  risk 7; see RAM above).
+- Production gateway TLS: per-host HTTP-01 is fine for a handful of projects; for many, a DNS-01
+  wildcard for `*.supa.example.com` (needs a DNS provider API token in A's Traefik) would remove
+  the per-project certificate and the `/hosts` poll.
+- Move the secrets file out of `/tmp`.
