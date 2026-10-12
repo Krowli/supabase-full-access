@@ -55,6 +55,16 @@ describe('parseBackupConfig', () => {
     expect(c.default.keep).toEqual({ daily: 7, weekly: 4, monthly: 6 })
   })
 
+  it('keeps the backups of a deleted project 30 days unless set otherwise', () => {
+    expect(parseBackupConfig(YAML).deleted_project_retention_days).toBe(30)
+    expect(parseBackupConfig(`${YAML}\ndeleted_project_retention_days: 0\n`).deleted_project_retention_days).toBe(0)
+    expect(parseBackupConfig(`${YAML}\ndeleted_project_retention_days: 90\n`).deleted_project_retention_days).toBe(90)
+    for (const bad of ['-1', '1.5', '"30"', '5000'])
+      expect(() => parseBackupConfig(`${YAML}\ndeleted_project_retention_days: ${bad}\n`)).toThrow(
+        /deleted_project_retention_days must be a whole number of days from 0 to 3650/
+      )
+  })
+
   it('strips trailing slashes from endpoints', () => {
     expect(parse().destinations.other.endpoint).toBe('https://s3.example.com')
   })

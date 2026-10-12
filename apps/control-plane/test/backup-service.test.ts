@@ -50,6 +50,24 @@ class MemoryRuns implements RunStore {
   async failInterrupted() {
     return 0
   }
+  deleted = new Map<string, { destination: string; deleted_at: Date; removed_at: Date | null }>()
+  async backedUp() {
+    const last = new Map<string, string>()
+    for (const r of this.rows)
+      if (r.kind !== 'restore' && r.status === 'succeeded' && r.destination) last.set(r.ref, r.destination)
+    return [...last].map(([ref, destination]) => ({ ref, destination }))
+  }
+  async noticeDeleted(ref: string, destination: string, at: Date) {
+    if (!this.deleted.has(ref)) this.deleted.set(ref, { destination, deleted_at: at, removed_at: null })
+  }
+  async deletedPending() {
+    return [...this.deleted]
+      .filter(([, d]) => !d.removed_at)
+      .map(([ref, d]) => ({ ref, destination: d.destination, deleted_at: d.deleted_at }))
+  }
+  async markRemoved(ref: string, at: Date) {
+    this.deleted.get(ref)!.removed_at = at
+  }
   async summary(ref: string) {
     const mine = this.rows.filter((r) => r.ref === ref)
     const scheduled = mine.filter((r) => r.kind === 'scheduled').map((r) => r.started_at ?? r.created_at)
@@ -175,6 +193,51 @@ describe('BackupService', () => {
     expect(await s.projectView(ref)).toMatchObject({ configured: false, snapshots: [] })
   })
 
+  it('removes the backups of a deleted project once its retention has passed, once', async () => {
+    await service().tick()
+    await settle()
+    registry.projects.delete(ref)
+
+    await service({ now: '2026-10-13T03:00:00Z' }).tick()
+    expect(runs.deleted.get(ref)).toMatchObject({ destination: 'main', removed_at: null })
+    expect(calls.filter((c) => c === 'mc rm')).toHaveLength(0)
+
+    await service({ now: '2026-11-11T03:00:00Z' }).tick() // 29 days after it was noticed
+    expect(calls.filter((c) => c === 'mc rm')).toHaveLength(0)
+
+    calls.length = 0
+    const s = service({ now: '2026-11-12T03:01:00Z' }) // 30 days
+    await s.tick()
+    expect(calls).toContain('mc rm')
+    expect(runs.deleted.get(ref)!.removed_at).toEqual(new Date('2026-11-12T03:01:00Z'))
+    await s.tick()
+    expect(calls.filter((c) => c === 'mc rm')).toHaveLength(1)
+    expect(runs.deleted.has('_platform')).toBe(false)
+  })
+
+  it('removes at once with retention 0, and waits when the destination is gone from the config', async () => {
+    await service().tick()
+    await settle()
+    registry.projects.delete(ref)
+    const other = CONFIG.replaceAll('main', 'other')
+    await service({ config: `${other}deleted_project_retention_days: 0\n`, now: '2026-10-13T03:00:00Z' }).tick()
+    expect(calls).not.toContain('mc rm')
+    expect(runs.deleted.get(ref)!.removed_at).toBeNull()
+
+    await service({ config: `${CONFIG}deleted_project_retention_days: 0\n`, now: '2026-10-13T03:01:00Z' }).tick()
+    expect(calls).toContain('mc rm')
+  })
+
+  it('a failed removal is retried on the next tick', async () => {
+    await service().tick()
+    await settle()
+    registry.projects.delete(ref)
+    await service({ config: `${CONFIG}deleted_project_retention_days: 0\n`, fail: 'mc', now: '2026-10-13T03:00:00Z' }).tick()
+    expect(runs.deleted.get(ref)!.removed_at).toBeNull()
+    await service({ config: `${CONFIG}deleted_project_retention_days: 0\n`, now: '2026-10-13T03:01:00Z' }).tick()
+    expect(runs.deleted.get(ref)!.removed_at).not.toBeNull()
+  })
+
   it('serves Studio: view, back up now, restore into a new project', async () => {
     const s = service()
     await s.reloadConfig()
@@ -191,7 +254,7 @@ describe('BackupService', () => {
       expect((await call('GET', '/projects/unknownunknownunknow')).status).toBe(404)
 
       const view = await (await call('GET', `/projects/${ref}`)).json()
-      expect(view).toMatchObject({ configured: true, destination: 'main', schedule: '02:30', snapshots: [{ id: 'abcdef0123456789', size_bytes: 42 }] })
+      expect(view).toMatchObject({ configured: true, destination: 'main', schedule: '02:30', deleted_project_retention_days: 30, snapshots: [{ id: 'abcdef0123456789', size_bytes: 42 }] })
       expect(JSON.stringify(view)).not.toContain('0123456789abcdef0123456789abcdef')
 
       expect((await call('POST', `/projects/${ref}/backups`)).status).toBe(202)

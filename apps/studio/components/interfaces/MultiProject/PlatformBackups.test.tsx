@@ -21,6 +21,7 @@ const VIEW = {
   configured: true,
   config_error: null,
   config_note: null,
+  deleted_project_retention_days: 30,
   enabled: true,
   destination: 'r2-main',
   schedule: '02:30',

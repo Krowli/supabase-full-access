@@ -2,6 +2,7 @@ import { useRouter } from 'next/router'
 import { toast } from 'sonner'
 
 import { TextConfirmModal } from '@/components/ui/TextConfirmModalWrapper'
+import { usePlatformBackupsQuery } from '@/data/platform-backups/platform-backups'
 import { useProjectDeleteMutation } from '@/data/projects/project-delete-mutation'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
@@ -23,6 +24,17 @@ export const MultiProjectDeleteDialog = ({
   const { data: project } = useSelectedProjectQuery()
   const { data: organization } = useSelectedOrganizationQuery()
 
+  // How long the platform keeps this project's backups once it is gone (SPEC.md §19).
+  const { data: backups } = usePlatformBackupsQuery(visible ? project?.ref : undefined)
+  const retentionDays =
+    backups?.configured && backups.enabled ? backups.deleted_project_retention_days : null
+  const backupsNote =
+    retentionDays === null || retentionDays === undefined
+      ? ''
+      : retentionDays === 0
+        ? ' Its backups are deleted with it.'
+        : ` Backups of this project are kept for ${retentionDays} days, then deleted.`
+
   const { mutate: deleteProject, isPending } = useProjectDeleteMutation({
     onSuccess: () => {
       toast.success(`Successfully deleted ${project?.name}`)
@@ -38,7 +50,7 @@ export const MultiProjectDeleteDialog = ({
       variant="destructive"
       title={`Confirm deletion of ${project?.name}`}
       alert={{ title: 'This action cannot be undone.' }}
-      text={`This will permanently delete the ${project?.name} project and all of its data: its database, its users and its storage files.`}
+      text={`This will permanently delete the ${project?.name} project and all of its data: its database, its users and its storage files.${backupsNote}`}
       confirmPlaceholder="Type the project name in here"
       confirmString={project?.name ?? ''}
       confirmLabel="I understand, delete this project"
