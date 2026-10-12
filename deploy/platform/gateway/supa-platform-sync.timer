@@ -1,0 +1,11 @@
+# Installed on the gateway host as /etc/systemd/system/supa-platform-staging-sync.timer.
+[Unit]
+Description=Run supa-platform-staging-sync every 15 s
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

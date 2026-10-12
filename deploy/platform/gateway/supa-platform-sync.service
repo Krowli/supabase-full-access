@@ -1,0 +1,8 @@
+# Installed on the gateway host as /etc/systemd/system/supa-platform-staging-sync.service.
+[Unit]
+Description=Sync the Traefik route for the Supabase platform (staging) project hosts
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/supa-platform-staging-sync
