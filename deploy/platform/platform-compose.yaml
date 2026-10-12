@@ -1,5 +1,5 @@
 # The shared platform stack (deploy/platform/SPEC.md §5, §12), installed as one Coolify
-# application: + New → Public Repository → this repo, branch platform/control-plane, Build Pack
+# application: + New → Public Repository → this repo, branch main, Build Pack
 # "Docker Compose", Docker Compose Location /deploy/platform/platform-compose.yaml, server = the
 # database server. The control plane in this stack creates the project stacks (project-compose.yaml).
 #
@@ -311,7 +311,7 @@ services:
       - 'STUDIO_PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.aioomi.com}'
       # No single-project stack here: `default` is the project list, not a database (SPEC.md §15).
       - STUDIO_DEFAULT_PROJECT=none
-      - 'DEFAULT_ORGANIZATION_NAME=Platform (staging)'
+      - 'DEFAULT_ORGANIZATION_NAME=Platform'
       # Shared services. pg-meta only reaches a database through Studio's encrypted header.
       - 'STUDIO_PG_META_URL=http://postgres-meta:8080'
       - 'PG_META_CRYPTO_KEY=${SERVICE_PASSWORD_PGMETA}'
