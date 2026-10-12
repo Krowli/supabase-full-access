@@ -9,6 +9,10 @@ on:
   push:
     branches:
       - main
+    # The platform stack and its control plane are not part of the Studio image.
+    paths-ignore:
+      - 'deploy/**'
+      - 'apps/control-plane/**'
   workflow_dispatch:
     inputs:
       multi_project:
@@ -23,8 +27,9 @@ permissions:
 # Two pushes in quick succession would otherwise race to tag `latest`, and the
 # slower build wins it — leaving `latest` pointing at the older commit. One run
 # per ref at a time; a superseded run is cancelled before it can push.
+# The multi-project build has tags of its own, so it does not cancel the plain one.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.multi_project && 'platform' || 'plain' }}
   cancel-in-progress: true
 
 jobs:
@@ -47,11 +52,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/krowli/supabase-full-access-studio
-          # `latest` is what the running Coolify stacks pull, so only main may move it.
-          # A run dispatched on another branch gets that branch's name as its tag.
+          # `latest` (single-project Studio) only from a plain build on main. The
+          # multi-project build for the platform (deploy/platform/platform-compose.yaml)
+          # is dispatched with multi_project and gets `platform` and `platform-<date>-sha-…`
+          # instead. A run dispatched on another branch gets that branch's name as its tag.
           tags: |
-            type=sha,prefix={{date 'YYYY.MM.DD'}}-sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=${{ inputs.multi_project && 'platform-' || '' }}{{date 'YYYY.MM.DD'}}-sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && !inputs.multi_project }}
+            type=raw,value=platform,enable=${{ github.ref == 'refs/heads/main' && inputs.multi_project }}
             type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' }}
 
       # apps/studio/Dockerfile declares one ARG, STUDIO_FRAMEWORK, and defaults

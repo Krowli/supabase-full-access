@@ -1,6 +1,6 @@
 # The gateway side of the platform, installed as one Coolify application on the gateway host
 # (server A, Coolify's own server): + New → Public Repository → this repo, branch
-# platform/control-plane, Build Pack "Docker Compose", Docker Compose Location
+# main, Build Pack "Docker Compose", Docker Compose Location
 # /deploy/platform/gateway/compose.yaml, server localhost. Nothing to fill in.
 #
 # Every 15 s it writes the Traefik dynamic file that routes every *.<suffix> host to the platform
