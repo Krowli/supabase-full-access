@@ -1567,3 +1567,21 @@ dashboard login: two projects created, both listed and opened, auto-confirm swit
 settings, sign-up, sign-in, `/auth/v1/user` and REST as that user, then both deleted and the
 `projects` environment left empty. Control plane: 61 tests pass, `tsc --noEmit` clean.
 
+
+## 18. Production (2026-10-12): Pieowl and ProjectB on the platform
+
+- The platform runs from `main` (fork branch fast-forwarded). Coolify project "Platform" (was
+  "Platform (staging)"), environment `production` (was `staging`) with the apps `platform` and
+  `gateway`; project stacks in `projects`. Studio's organisation: "Platform". Sections §14–§17 keep
+  the old names as history.
+- Studio image: `ghcr.io/krowli/supabase-full-access-studio:platform@sha256:…`, built by a manual
+  "Publish Studio (fork)" run on `main` with `multi_project` (tags `platform`,
+  `platform-<date>-sha-<sha>`); `latest` stays the plain single-project build from pushes to `main`.
+  Pushes that only touch `deploy/**` or `apps/control-plane/**` skip the Studio build.
+- Pooler for apps outside B: Supavisor published on `10.10.0.1:6543` (transaction) and
+  `10.10.0.1:6542` (session, container port 5432). Tenants use `require_user: false` with
+  `auth_query` run by the manager `pgbouncer` (password = project db password), so any project role
+  connects as `<role>.<ref>` (src/tenants.ts, test/tenants.test.ts). Prisma: `pgbouncer=true` on 6543,
+  `directUrl` on 6542.
+- Projects: `pieowl` (`projectref1aaaaaaaaa`, role `pieowl` for the Pieowl apps) and `projectb`
+  (`projectref2bbbbbbbbb`, 7 app migrations, 3 pg_cron jobs — pg_cron works in project stacks).
