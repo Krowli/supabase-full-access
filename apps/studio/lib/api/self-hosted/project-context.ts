@@ -5,7 +5,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { z } from 'zod'
 
 import { DEFAULT_AUTH_JWT_SECRET } from './constants'
-import { fetchControlPlaneProjects } from './control-plane-registry'
+import { fetchControlPlaneProjects, type ControlPlaneConfig } from './control-plane-registry'
 
 /**
  * Which project a self-hosted API request is for, and where that project's backends are.
@@ -243,6 +243,8 @@ function loadRegistryFile(path: string): Registry {
 
 let controlPlaneCache: { url: string; loadedAt: number; projects: Registry } | undefined
 let controlPlaneLoad: { url: string; promise: Promise<Registry> } | undefined
+/** Bumped by `invalidateProjectRegistry`, so a load that started before a change is not cached. */
+let controlPlaneGeneration = 0
 
 function requiredEnv(name: string): string {
   const value = process.env[name]
@@ -252,13 +254,20 @@ function requiredEnv(name: string): string {
   return value
 }
 
-async function fetchControlPlaneRegistry(url: string): Promise<Registry> {
+/** How to reach the control plane, or `undefined` when Studio does not use one. */
+export function controlPlaneConfig(): ControlPlaneConfig | undefined {
+  const url = process.env.STUDIO_PROJECT_REGISTRY_URL
+  if (!url) return undefined
   const domainSuffix = requiredEnv('STUDIO_PROJECT_DOMAIN_SUFFIX')
   if (!/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/i.test(domainSuffix)) {
     throw new ProjectContextError('STUDIO_PROJECT_DOMAIN_SUFFIX is not a domain')
   }
   const token = requiredEnv('STUDIO_PROJECT_REGISTRY_TOKEN')
-  const projects = await fetchControlPlaneProjects({ url, token, domainSuffix })
+  return { url, token, domainSuffix }
+}
+
+async function fetchControlPlaneRegistry(url: string): Promise<Registry> {
+  const projects = await fetchControlPlaneProjects({ ...controlPlaneConfig()!, url })
 
   const resolved: Registry = new Map([[DEFAULT_PROJECT_REF, defaultProject(DEFAULT_PROJECTS_DIR)]])
   for (const project of projects) {
@@ -279,10 +288,13 @@ function loadControlPlaneRegistry(url: string): Promise<Registry> {
   }
   if (controlPlaneLoad?.url === url) return controlPlaneLoad.promise
 
+  const generation = controlPlaneGeneration
   const promise = fetchControlPlaneRegistry(url)
     .then(
       (projects) => {
-        controlPlaneCache = { url, loadedAt: Date.now(), projects }
+        if (generation === controlPlaneGeneration) {
+          controlPlaneCache = { url, loadedAt: Date.now(), projects }
+        }
         return projects
       },
       (error: unknown) => {
@@ -300,6 +312,18 @@ function loadControlPlaneRegistry(url: string): Promise<Registry> {
     })
   controlPlaneLoad = { url, promise }
   return promise
+}
+
+/**
+ * Forgets the control plane's registry after Studio has created, retried or deleted a project, so
+ * the next request reads the change instead of a list up to `CONTROL_PLANE_TTL_MS` old. A load
+ * already in flight may predate the change, so it is neither joined nor cached. The old list stays
+ * as the last good registry in case the control plane fails the next read.
+ */
+export function invalidateProjectRegistry(): void {
+  controlPlaneGeneration += 1
+  if (controlPlaneCache) controlPlaneCache.loadedAt = 0
+  controlPlaneLoad = undefined
 }
 
 function loadRegistry(): Promise<Registry> {

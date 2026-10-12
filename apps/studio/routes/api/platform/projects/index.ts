@@ -6,5 +6,5 @@ import nextHandler from '@/pages/api/platform/projects'
 const handler = toWebHandler(nextHandler)
 
 export const Route = createFileRoute('/api/platform/projects/')({
-  server: { handlers: { GET: handler } },
+  server: { handlers: { GET: handler, POST: handler } },
 })

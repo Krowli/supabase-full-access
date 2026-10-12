@@ -3,12 +3,15 @@ import { NextApiRequest, NextApiResponse } from 'next'
 import { apiWrapper } from '@/lib/api/apiWrapper'
 import { applyProjectDetail } from '@/lib/api/self-hosted/multi-project'
 import { isMultiProject } from '@/lib/api/self-hosted/project-context'
+import { handleDeleteProject } from '@/lib/api/self-hosted/project-lifecycle'
 import { DEFAULT_PROJECT, PROJECT_REST_URL } from '@/lib/constants/api'
 
 export default (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { method } = req
+  // Fork: delete through the control plane (deploy/platform/SPEC.md M6)
+  if (method === 'DELETE' && isMultiProject()) return handleDeleteProject(req, res)
 
   switch (method) {
     case 'GET':

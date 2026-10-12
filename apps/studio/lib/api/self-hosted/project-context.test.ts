@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AUTH_JWT_SECRET } from './constants'
 import {
   adminJwtSecret,
+  invalidateProjectRegistry,
   isMultiProject,
   listProjects,
   projectEnv,
@@ -432,6 +433,32 @@ describe('registry from the control plane', () => {
     vi.stubEnv('STUDIO_PROJECT_REGISTRY_TOKEN', TOKEN)
     vi.stubEnv('STUDIO_PROJECT_DOMAIN_SUFFIX', undefined)
     await expect(listProjects()).rejects.toThrow(/STUDIO_PROJECT_DOMAIN_SUFFIX/)
+  })
+
+  it('asks the control plane again right after an invalidation', async () => {
+    await listProjects()
+    invalidateProjectRegistry()
+    await listProjects()
+    expect(calls.filter(({ path }) => path === '/projects')).toHaveLength(2)
+  })
+
+  it('does not cache a load that started before an invalidation', async () => {
+    const before = listProjects()
+    invalidateProjectRegistry()
+    expect((await before).map(({ ref }) => ref)).toEqual(['default', REF])
+
+    projects = []
+    expect((await listProjects()).map(({ ref }) => ref)).toEqual(['default'])
+  })
+
+  it('keeps the invalidated registry as the last good one while the control plane fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await listProjects()
+    invalidateProjectRegistry()
+
+    failWith = 503
+    expect((await listProjects()).map(({ ref }) => ref)).toEqual(['default', REF])
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/\/projects answered 503/))
   })
 
   it('refuses a registry file and a control plane at once', async () => {
