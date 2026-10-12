@@ -1,6 +1,6 @@
 # Multi-project self-hosted Studio: design spec
 
-Status: draft, 2026-10-12. Branch `platform/control-plane`. M0 done (§8); M1 code done (§9); M2 and the M3 Studio side code done, server checks pending (§11).
+Status: draft, 2026-10-12. Branch `platform/control-plane`. M0 done (§8); M1 code done (§9); M2 and the M3 Studio side code done, server checks pending (§11); M6 Studio side code done, server check pending (§12).
 
 Goal: one Studio on the database server that lists many projects, switches between them, and has
 a "New project" button. Each project gets its own Postgres, GoTrue, PostgREST and storage-api.
@@ -697,3 +697,151 @@ the second project's host.
 - BuildingState already polls `/status`; `COMING_UP` → `ACTIVE_HEALTHY` is served by the
   status route, and `INIT_FAILED` needs a message and a retry (`POST /projects {ref}`).
 - MCP per project (resolve `?project_ref=`) once the MCP tools' reads go through the resolver.
+
+## 12. M6 status (2026-10-12): the create button, Studio side
+
+**What was built.** Commits `121777ad..3b1f6323` on `platform/control-plane`. Paths under `studio/`.
+Contract coded against `platform/cp-service` `apps/control-plane/src/server.ts`.
+
+- **Server** (`lib/api/self-hosted/project-lifecycle.ts`, new; writes added to
+  `control-plane-registry.ts`; `controlPlaneConfig()` and `invalidateProjectRegistry()` added to
+  `project-context.ts`). Each route is one control-plane call with the bearer token, then the cached
+  registry is invalidated so the next request sees the change (a load already in flight is neither
+  joined nor cached; the old list stays as the "last good" fallback).
+
+  | Local route | Control plane | Answer |
+  |---|---|---|
+  | `POST /platform/projects {name, …}` | `POST /projects {name}` (15 s timeout); every other field, `db_pass` included, is dropped | 201 `CreateProjectResponse`: `ref`, `name`, `status` (mapped, so `COMING_UP`), `endpoint`, `inserted_at`, `organization_slug: default-org-slug`; `id: 0`, `anon_key`/`service_key: ''` (nothing reads them) |
+  | `POST /platform/projects/{ref}/retry` (new, fork) | `POST /projects {ref}` | 202 `{ref, status: COMING_UP}` (`ACTIVE_HEALTHY` if it already runs) |
+  | `DELETE /platform/projects/{ref}` | `DELETE /projects/<ref>` (120 s timeout: it runs every step before answering) | 200 `{id: 0, ref, name}` |
+
+  - Errors are `{ message }`, the platform shape `data/fetchers.ts` `handleError` reads; the
+    `{ error: { message } }` of the other self-hosted routes reaches the user as an unspecified error.
+    The control plane's 400/404/409 keep their status and its `error` text (e.g. "Project <ref> is
+    being provisioned"); a 401/403, a 5xx, a timeout or no connection is a 502 naming the call
+    (`control plane POST /projects answered 500`), never the token or a body.
+  - Name: trimmed, 1-64 chars, else 400 without a call. `default` cannot be retried or deleted (400).
+    An unknown ref is still `apiWrapper`'s 404, without a call.
+  - No registry: unchanged (405 for POST and DELETE). A registry file: 501 "… only with the control
+    plane as its registry (STUDIO_PROJECT_REGISTRY_URL)".
+- **Create UI.**
+  - `pages/new-project.tsx` (+ TanStack mirror `routes/new-project.tsx`), laid out like `/new/[slug]`,
+    form in `components/interfaces/MultiProject/NewProjectForm.tsx`: one field, upstream's name rules
+    (`ProjectCreation.schema.ts`, 3-64 chars), a note that the control plane generates and keeps the
+    DB password, the error inline. Uses upstream's `useProjectCreateMutation` (with `dbPass: ''`,
+    which the route drops) and then `router.push('/project/<ref>')`. Without the flag the page sends
+    the visitor to `/`.
+  - The one redirect: `pages/new/[slug].tsx` renders `RedirectToNewProject` under the flag, so every
+    upstream "New project" link (dropdown, org home, empty states) ends on the fork form and
+    `ProjectCreationForm` never mounts. The header dropdown also links to `/new-project` directly.
+  - `projects:create` needed no patch: it is a runtime feature, on unless the profile or
+    `ENABLED_FEATURES_PROJECTS_CREATE=false` turns it off (`packages/common/enabled-features`). Drop
+    that variable, which §11 suggested until M6.
+- **After create.** `/project/<ref>` loads; the detail route reports `COMING_UP` (`CREATING` and
+  `COMING_UP` map to it, §11) and the detail query re-polls every 5 s while it is
+  (`data/projects/project-detail-query.ts:108-116`).
+  - Under the flag, `ProjectLayout`'s `ContentWrapper` shows `components/interfaces/MultiProject/ProvisioningState.tsx`
+    on every page that needs the database, **the home included**, for `COMING_UP`, `UNKNOWN` and
+    `INIT_FAILED`. For the first two that is upstream's `BuildingState`, which polls
+    `GET /platform/projects/{ref}/status` every 4 s (`BuildingState.tsx:33-40`,
+    `project-status-query.ts:17`, i.e. the M2 status route) and reloads the project on
+    `ACTIVE_HEALTHY`, after which the home renders. Settings, logs and functions pages stay reachable.
+  - `INIT_FAILED`: a failed screen with **Retry** (`data/projects/project-retry-mutation.ts` →
+    the retry route; on success the cached detail is set to `COMING_UP` so the building screen takes
+    over) and **Delete project**.
+- **Delete** (cheap, so done): Settings → General gets `MultiProjectDeletePanel` under the flag for
+  every project but `default`; it and the failed screen open `MultiProjectDeleteDialog`, upstream's
+  `TextConfirmModal` with the typed project name and upstream's `useProjectDeleteMutation`, then go
+  to `/project/default`. Upstream's `DeleteProjectModal` is not reused: the local subscription stub
+  says `enterprise`, so it demands a cancellation reason and posts an exit survey to a platform route
+  that does not exist here (an error toast after every delete).
+
+**Upstream patches in this round** (added/removed lines):
+
+| File | +/- |
+|---|---|
+| `pages/api/platform/projects/index.ts` | +3 −0 |
+| `pages/api/platform/projects/[ref]/index.ts` | +3 −0 |
+| `routes/api/platform/projects/index.ts`, `routes/api/platform/projects/$ref/index.ts` | +1 −1 each |
+| `pages/new/[slug].tsx` | +5 −0 |
+| `components/layouts/AppLayout/ProjectDropdown.tsx` | +2 −1 |
+| `components/layouts/ProjectLayout/index.tsx` | +9 −0 |
+| `pages/project/[ref]/settings/general.tsx` | +4 −0 |
+| `routeTree.gen.ts` (generated, `@tanstack/router-generator`) | +43 −0 |
+
+New fork files: `lib/api/self-hosted/project-lifecycle.ts`, `pages/api/platform/projects/[ref]/retry.ts`
+(+ mirror), `pages/new-project.tsx` (+ mirror), `data/projects/project-retry-mutation.ts`,
+`components/interfaces/MultiProject/{NewProjectForm,RedirectToNewProject,ProvisioningState,MultiProjectDeletePanel,MultiProjectDeleteDialog}.tsx`.
+Fork files changed: `control-plane-registry.ts`, `project-context.ts`.
+
+**Tests** (`NODE_ENV=test vitest --run`, whole studio suite, compared by test id):
+
+| | Files | Tests | Failed |
+|---|---|---|---|
+| Before (5d01706a) | 734 | 8569 | 0 |
+| After (3b1f6323) | 740 | 8617 (8569 old + 48 new) | 0 |
+
+By test id: none of the 8569 old tests is missing or changed status. The env guard is green.
+
+New tests: `tests/pages/api/platform/project-lifecycle.test.ts` (18: real handlers, MSW control
+plane — create, name validation, 400/401/500/unreachable mapping, no-token-in-body, the new project
+visible at once, retry, delete, `default` refused, no registry and registry file unchanged),
+`project-context.test.ts` (+3, invalidation), `NewProjectForm.test.tsx` (5: validation, submit
+body, redirect, error shown), `new-project-routing.test.tsx` (4: flag on/off for both pages),
+`ProjectDropdown.multi-project.test.tsx` (+2: link target), `ProvisioningState.test.tsx` (5:
+building vs failed, retry, delete), `MultiProjectDeletePanel.test.tsx` (2),
+`ProjectLayout/index.multi-project.test.tsx` (9: provisioning on home/editor, settings reachable,
+flag off unchanged). `tsc --noEmit` passes. ESLint on the touched files: 0 errors; warnings are the
+existing `import/no-anonymous-default-export` on the two upstream route files, one existing
+`exhaustive-deps` in `ProjectLayout/index.tsx`, and `no-explicit-any` in the `ui` mocks copied from
+`ProjectLayout/index.test.tsx`.
+
+**Deviations.**
+
+- §4 B+ said the page asks for a name and a DB password; it asks for the name only, because the
+  control plane generates every secret. Nothing in self-hosted Studio shows the password; it is in
+  the control plane (`GET /projects/<ref>/secrets`).
+- The "one redirect" is a component in `pages/new/[slug].tsx`, not a `next.config` redirect, so it
+  also catches client-side navigation and the TanStack build.
+- Upstream shows a building project's home as a dimmed dashboard whose reads all fail for a project
+  without a stack; under the flag the home shows `BuildingState` too.
+- Errors of the three lifecycle routes are `{ message }` (above), unlike the other fork routes.
+- Delete (M8's Studio half) is done; the control plane's `DELETE` already does the cleanup.
+
+**Known gaps (LATER).**
+
+- The failed screen does not say which step failed or why: the control plane's `step` and
+  `last_error` are not carried through the registry. It points to the control plane's log.
+- Retry race: if Studio re-reads the registry before the control plane has flipped `FAILED` to
+  `CREATING` (milliseconds), the detail can read `INIT_FAILED` again for up to 10 s; pressing
+  Retry again joins the run already in flight, so it is harmless.
+- `BuildingState` is upstream's: its API keys card cannot load until the project has a stack
+  (`projectEnv` refuses "not ready"), and it links to Supabase support.
+- `UNKNOWN` (which also covers the control plane's `DELETING`) shows the building screen.
+- MCP per project (resolve `?project_ref=`) is still refused under a registry (§11).
+
+**Running Studio against the control plane.**
+
+- Build arg: `NEXT_PUBLIC_IS_MULTI_PROJECT=true` (Dockerfile `ARG` in `build-next`; the publish
+  workflow sets it for a manual run with `multi_project: true`).
+- Studio container, runtime:
+  - `STUDIO_PROJECT_REGISTRY_URL=http://control-plane-<platform-service-uuid>:8080` — the control
+    plane on the shared `coolify` network (§8: only the full alias resolves across services; the
+    control plane's `PORT` defaults to 8080). `STUDIO_PROJECT_REGISTRY` must not be set.
+  - `STUDIO_PROJECT_REGISTRY_TOKEN` = the control plane's `CONTROL_PLANE_TOKEN`.
+  - `STUDIO_PROJECT_DOMAIN_SUFFIX` = the control plane's `PROJECT_DOMAIN_SUFFIX` (projects are
+    `https://<ref>.<suffix>`).
+  - `PLATFORM_ADMIN_JWT_SECRET` = the control plane's `PLATFORM_ADMIN_JWT_SECRET`, the shared
+    Supavisor and Realtime `API_JWT_SECRET`.
+  - Not `ENABLED_FEATURES_PROJECTS_CREATE=false`.
+  - Unchanged: `default`'s own env (`POSTGRES_*`, `SUPABASE_*`, `AUTH_JWT_SECRET`, `PG_META_CRYPTO_KEY`,
+    …), `SUPAVISOR_URL`/`REALTIME_URL` pointing at the shared services, the fork's
+    `STUDIO_INTERNAL_URL`, and the `/data/pieowl/projects` bind mount from M3 (per-project GoTrue,
+    storage and state directories).
+  - Studio must be on the `coolify` network (`connect_to_docker_network: true`) to reach the
+    control plane and the projects' `supabase-db-<uuid>` hosts.
+
+**Not verified.** Nothing ran on a server. The M6 verify (click "New project", enter a name, see the
+building screen and then the project home; the project is in the dropdown and its Table Editor
+works) needs a Studio image built with `multi_project: true`, the platform stack with the control
+plane (M4/M5) and wildcard DNS for `<ref>.<suffix>`.
