@@ -1262,7 +1262,14 @@ server B; commits `71399f9a..` on `platform/control-plane`).
   (`apps/control-plane/src/kong.ts`, `renderDashboard`) when `DASHBOARD_URL` is set. The basic-auth
   consumer is in no ACL group, so its credentials open no project route, and no project key opens
   the dashboard. The service's read timeout is 180 s (a project delete waits for every step).
-- **Log in:** the browser asks for basic auth. User and password are `DASHBOARD_USERNAME` and
+- **Coolify Links (M8):** the service's Links dropdown shows `https://studio.supa.aioomi.com`
+  (deploy.py sets it as Kong's URL) and, unavoidably, two bogus entries
+  `https://coolify-admin.aioomi.com:10.10.0.1`: Coolify 4.4.6 adds one link per `ports:` entry
+  (`app/View/Components/Services/Links.php`, base URL + the part before the first `:`), and has
+  no setting to hide them; dropping the two `10.10.0.1:` bindings would break A's route and the
+  `/hosts` poll. See §16.
+- **Log in:** the browser asks for basic auth (since M8 the keys are `SERVICE_USER_ADMIN` /
+  `SERVICE_PASSWORD_ADMIN`, §16). Before M8: user and password are `DASHBOARD_USERNAME` and
   `DASHBOARD_PASSWORD` in the SOPS file `infra/platform/staging.env` (`sops decrypt
   platform/staging.env`). They were rotated once during M7 (the first pair was printed to an
   operator log by mistake). After basic auth Studio has no login of its own.
@@ -1357,16 +1364,16 @@ on one run. None blocks a step.
 
 **Open issues.**
 
-- **Project auth/storage settings do not reach the projects yet.** Studio writes
+- **(Fixed in M8, §16.) Project auth/storage settings do not reach the projects yet.** Studio writes
   `<projectsDir>/<ref>/{gotrue,storage}` (now `/data/supa-platform-staging/projects` on B), but
   `project-compose.yaml` still mounts per-service named volumes there (§13 deviation, "M3 swaps
   them"). Bind the project stacks to the same host dir, and remove `<ref>/` on delete (the control
   plane does not today).
-- Not-ready reads answer **500**; a 503 (or `ProjectContextError` → 409) would read as "not yet"
+- (Fixed in M8, §16: 503.) Not-ready reads answer **500**; a 503 (or `ProjectContextError` → 409) would read as "not yet"
   rather than a failure in the console.
 - The "being deleted" screen was not caught live (the delete finished before a second tab loaded);
   it is covered by `ProvisioningState.test.tsx` and `index.multi-project.test.tsx`.
-- The org page's sidebar keeps upstream's Team / Usage / Billing links, which do nothing self-hosted.
+- (Fixed in M8, §16.) The org page's sidebar keeps upstream's Team / Usage / Billing links, which do nothing self-hosted.
 - Snippets are one folder for all projects; logs (no Logflare in the platform), MCP (refused, §11),
   the edge-functions test route, per-project publishable/secret keys (only legacy keys exist) remain
   as in §11-§12.
@@ -1385,3 +1392,133 @@ on one run. None blocks a step.
 4. Point the app at `https://<ref>.supa.aioomi.com` (or add a custom host to the Kong route and
    the A-side certificate list), check, then delete the old Coolify stack. Do it on staging with a
    copy first; Pieowl and Taxroam stay untouched until then.
+
+## 16. M8 settings status (2026-10-12): per-project auth and storage settings take effect
+
+**What changed** (commits `76e9ac27..` on `platform/control-plane`).
+
+- **Settings directories.** Studio's resolver writes a project's files to
+  `/data/pieowl/projects/<ref>/{gotrue,storage,state}` inside its container
+  (`project-context.ts` `DERIVED_ENV`). That container path is now the host directory
+  `PROJECTS_HOST_DIR` (deploy.py `--projects-host-dir`, default `/data/supa-platform-staging/projects`;
+  rendered into the platform compose as `{{PROJECTS_HOST_DIR}}`, no longer hard-coded).
+  - `project-compose.yaml` binds `<dir>/<ref>/gotrue` → `/etc/gotrue:ro` in `supabase-auth`
+    (started with `auth --config-dir /etc/gotrue`, template reloading on) and `<dir>/<ref>/storage` →
+    `/etc/studio-config:ro` in `supabase-storage` (the fork's `set -a; . storage.env` command). The
+    named volumes `gotrue-config` and `storage-config` are gone. The control plane renders the
+    placeholder `{{PROJECTS_HOST_DIR}}` from its env `PROJECTS_HOST_DIR`.
+  - The control plane owns the directories, without the Docker socket: the platform compose binds
+    `<dir>` into it at the same path, and a one-shot `projects-dir` container (the control-plane
+    image as root) `chown`s `<dir>` to uid 1000 before the control plane starts. A new first
+    provisioning step `config_dirs` creates `<ref>/` (0750) with `gotrue`, `storage` (0755) and
+    `state` (0700), owned 1000:1000 (the control plane's `node` user, also GoTrue's `supabase`
+    user), before the Coolify service exists, so Docker never auto-creates them as root. Delete ends
+    with `config_dirs`: `rm -rf <ref>/` (Studio's files inside are root-owned, but the directories
+    are the control plane's, so it may remove them); a failure leaves `DELETING` with
+    `step=config_dirs` and the next `DELETE` finishes (`src/project-dirs.ts`, tests in
+    `test/project-dirs.test.ts`, `provisioner.test.ts`).
+  - Templates: Studio writes `GOTRUE_MAILER_TEMPLATES_<ID>=$STUDIO_INTERNAL_URL/api/platform/auth/<ref>/templates/<id>/content`,
+    `STUDIO_INTERNAL_URL=http://studio-<platform-uuid>:3000`; project GoTrue reaches it over
+    `coolify` (checked by verify.py from inside the auth container).
+- **Stack settings mirrored.** Studio answers a settings page before anything is saved from what
+  the stack runs with, and a save renders every setting. Control-plane projects had none of the
+  mirrored values, so a first save would have written GoTrue's own defaults (phone sign-in off, SMS
+  autoconfirm off, Site URL `http://localhost:3000`) and storage's (50 MB, image transforms off).
+  `control-plane-registry.ts` now gives each project `STACK_SETTINGS` (the compose's GoTrue,
+  storage-api and PostgREST values) and `GOTRUE_SITE_URL=https://<ref>.<suffix>`; a test keeps
+  `STACK_SETTINGS` equal to `project-compose.yaml`.
+- **Not-ready reads → 503.** `projectEnv` throws `ProjectNotReadyError` for a project without a
+  stack (COMING_UP, or GOING_DOWN); `withProjectContext` answers it `503` with `Retry-After: 5` and
+  "Project <ref> is not ready yet (COMING_UP): its stack is still being set up and has no <NAME>.
+  Try again in a few seconds" (being deleted: "… it is being deleted …"). `default` without a stack
+  stays 500 "no stack here".
+- **Org menus.** Under `NEXT_PUBLIC_IS_MULTI_PROJECT` the organization sidebar
+  (`components/interfaces/Sidebar.tsx`, +6 −1) and the mobile org menu (`OrgMenuContent.tsx`,
+  +5 −1) show Projects only. Team, Integrations, Usage, Billing and Organization settings read
+  `/platform/organizations/<slug>/…` routes self-hosted Studio does not have (404s, endless
+  skeletons; checked live before the change, `/tmp/plt/e2e-settings/00-org-*.png`).
+- **Dashboard login in Coolify.** Coolify 4.4.6 fills the service page's "Service configuration"
+  panel from `Service::extraFields()` (`app/Models/Service.php:343`, rendered by
+  `StackForm.php:98` / `stack-form.blade.php:63`): for any container whose image contains `kong` it
+  shows the service env vars `SERVICE_USER_ADMIN` / `SERVICE_PASSWORD_ADMIN` as
+  "Supabase · Dashboard User / Dashboard Password" (`Service.php:709-732`, the one-click Supabase
+  template's mechanism). The keys are now named so in the SOPS file and Coolify; the control plane
+  still reads `DASHBOARD_USERNAME=${SERVICE_USER_ADMIN}` / `DASHBOARD_PASSWORD=${SERVICE_PASSWORD_ADMIN}`.
+  The owner sees them at Projects → Platform (staging) → staging → platform → General → Service
+  configuration.
+- **Links.** deploy.py sets Kong's URL to `https://studio.<suffix>` (`PATCH /services/<uuid>`
+  `urls`; Studio's is cleared first, Coolify refuses a domain two containers hold). Coolify then
+  labels Kong for B's own Traefik (router `Host(studio.supa.aioomi.com)` → Kong :8000). That proxy
+  is not reachable from the internet (B's 80/443 time out from outside) and the route ends at Kong's
+  basic auth (401 without credentials, checked on B); its only effect is a failed ACME HTTP-01
+  attempt in B's proxy log on each reload (B's own ACME account; A's certificate is unaffected).
+  A Studio URL would have routed B's proxy straight to Studio without basic auth, and a user label
+  `traefik.enable=false` does not override Coolify's generated one (tried). The two port-derived
+  bogus links stay (§15).
+- **Secrets rotated.** Every value in `infra/platform/staging.env` (14 keys) was regenerated with no
+  projects on the platform, after the file had been in the operator Mac's `/tmp` while a stray
+  `python -m http.server` served `/tmp` on all interfaces. `PLATFORM_DB_PASSWORD` needs
+  `ALTER USER postgres` in `platform-db` before the redeploy (the volume keeps the old password).
+  MinIO, Supavisor and Realtime (no tenants) took the new keys on restart. Old dashboard
+  credentials → 401, new → 200. infra commit `85cee26`.
+
+**Images.** Studio `ghcr.io/krowli/supabase-full-access-studio:platform-control-plane@sha256:a9d0db9a2b7617928345f5934ab768c2563e94d0f1d10206b307cc3e7cf16ad2`
+(commit `cf0a2c79`, Actions run 38208253672, `multi_project=true`; `latest` untouched); control
+plane `ghcr.io/krowli/supabase-control-plane:sha-cf0a2c79a72d89c388734e241e085e620595345b`
+(built on B).
+
+**Tests.**
+
+| | Files | Tests | Failed |
+|---|---|---|---|
+| Studio before (M7, `080cfb2c`) | 741 | 8632 | 0 |
+| Studio after (`cf0a2c79`) | 742 | 8636 | 0 |
+| Control plane before | 6 (1 skipped) | 49 passed + 3 skipped | 0 |
+| Control plane after | 7 (1 skipped) | 56 passed + 3 skipped | 0 |
+
+By test id: no Studio test changed status; one was renamed with its new expectation
+(`project-switcher` "refuses its database until its stack exists" → "answers its database reads
+503 …", also covering a pg-meta query); new: `Sidebar.multi-project.test.tsx` (3),
+`control-plane-registry` STACK_SETTINGS vs compose (1). `tsc --noEmit` clean (Studio and control
+plane); ESLint on touched Studio files 0 errors (1 existing warning in `Sidebar.tsx`).
+
+**verify.py** now 42 checks (+10: settings dirs and owner, binds and `--config-dir`, Studio auth
+save, GoTrue applied it without restart (`/auth/v1/settings` `external.anonymous_users`, ~7 s),
+"reloading api with new configuration", email template fetched from Studio over `coolify`, Studio
+storage save, `storage.env` in the container, saved limit after a storage restart (2000 B → 413,
+500 B → 200), image transforms still on, `<ref>/` removed on delete). Run after the rotation:
+**42 of 42 pass** (`/tmp/plt/verify-m8-2.log`), create → ACTIVE_HEALTHY 20 s, Coolify restart →
+routes back in 15 s. The first run (old secrets) failed only its own new check, which read
+`anonymous_users` at the top level; fixed. RAM: platform 1084 MB, one project 324 MB; B 2.5 GB
+available.
+
+**Browser end to end** (Playwright + Chrome for Testing, screenshots `/tmp/plt/e2e-settings/`):
+
+| Step | Result |
+|---|---|
+| New project "settings-test" | home after 21.8 s; building-time reads now 503 "not ready yet" (console) |
+| Auth → URL Configuration opens on `https://<ref>.supa.aioomi.com` (mirrored); set `https://m8-site.example.com`, save | 200; reload shows the new value; `99_studio.env` has `GOTRUE_SITE_URL="https://m8-site.example.com"` |
+| Auth → Emails → SMTP: on, host `smtp.example.com`, port 2525, dummy user/pass/sender, save | 200; reload shows them; `GOTRUE_SMTP_HOST/PORT/USER/ADMIN_EMAIL` in `99_studio.env` |
+| Sign In / Providers: Allow anonymous sign-ins on, save | 200; `GET https://<ref>.supa.aioomi.com/auth/v1/settings` → `external.anonymous_users: true` (phone and email still true) |
+| GoTrue on B | `starting configuration reloader`, then `reloading api with new configuration` (the three saves 4 s apart fell into one 5 s grace period: one reload) |
+| Storage → Settings opens on 500 MB (mirrored); set 1 MB, save | 200; `storage.env` in the container has `UPLOAD_FILE_SIZE_LIMIT="1048576"` and image transforms `true`; after `docker restart supabase-storage-<uuid>` PID 1 runs with 1048576: 2 MB upload → 413 "Payload too large", 0.5 MB → 200 |
+| Delete from Settings → General | 7.8 s; `<dir>/<ref>/` gone; control plane 0 projects, `/hosts` = studio only, no Coolify service, no containers/volumes/networks/service dir, MinIO 0 buckets and service accounts |
+| Org page | sidebar shows Projects only (`11-org-sidebar.png`) |
+
+**Remaining issues.**
+
+- **Storage settings need a storage restart, and Studio cannot trigger it** on the platform. The
+  page says to restart `supabase-storage`; today that is `docker restart supabase-storage-<uuid>`
+  on B or a Coolify restart of the project service (restarts its whole stack). A control-plane
+  route (e.g. `POST /projects/<ref>/restart {service: storage}`) and a button would close it.
+- Site URL and SMTP are not visible in `/auth/v1/settings`; they were confirmed in `99_studio.env`,
+  the reload log line and Studio's read-back, not by sending mail.
+- Studio writes its files as root; the control plane can remove them only because it owns the
+  directories. If Studio ever wrote a sub-directory there, delete would stop at `config_dirs`.
+- Project settings menu still has upstream's Billing group (Subscription / Usage links) and the
+  command menu's org entries; only the org sidebars were trimmed.
+- `STACK_SETTINGS` duplicates values from `project-compose.yaml` (guarded by a test); a project
+  stack with different values would need them per project from the control plane.
+- B's Coolify proxy logs a failed ACME attempt for `studio.supa.aioomi.com` on each reload (above).
+- Unchanged from §15: `default` reads before the redirect answer 500 "no stack here", snippets
+  shared, no Logflare, MCP refused, control-plane image built on B, operator's Coolify token.
