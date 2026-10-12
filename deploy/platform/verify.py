@@ -6,7 +6,8 @@
 Checks the dashboard (Studio at studio.<suffix>, basic auth). Creates one project through the
 control-plane API, waits for ACTIVE_HEALTHY, checks REST, Auth,
 Storage (+ MinIO and image transforms), the pooler and Realtime from the internet and from the
-`coolify` network, restarts Kong to check the config comes back, measures RAM, then deletes the
+`coolify` network, that settings saved in Studio reach the project's GoTrue (live reload, email
+template served over `coolify`) and storage-api (after a restart), restarts Kong to check the config comes back, measures RAM, then deletes the
 project and checks every registration is gone. Secrets go to remote commands on stdin only and
 are never printed. Needs SSH to server B through the jump host.
 """
@@ -108,6 +109,7 @@ def main() -> None:
     ap.add_argument('env_file')
     ap.add_argument('--platform', required=True, help='platform Coolify service uuid')
     ap.add_argument('--suffix', default='supa.aioomi.com')
+    ap.add_argument('--projects-host-dir', default='/data/supa-platform-staging/projects')
     args = ap.parse_args()
     env = dict(l.split('=', 1) for l in Path(args.env_file).read_text().splitlines() if '=' in l)
     U = args.platform
@@ -120,7 +122,7 @@ def main() -> None:
     studio = f'https://studio.{args.suffix}'
     code, _ = public('GET', f'{studio}/api/platform/profile')
     check('dashboard without credentials -> 401', code == 401, str(code))
-    basic = base64.b64encode(f'{env["DASHBOARD_USERNAME"]}:{env["DASHBOARD_PASSWORD"]}'.encode()).decode()
+    basic = base64.b64encode(f'{env["SERVICE_USER_ADMIN"]}:{env["SERVICE_PASSWORD_ADMIN"]}'.encode()).decode()
     code, _ = public('GET', f'{studio}/api/platform/profile', {'Authorization': f'Basic {basic}'})
     check('dashboard with credentials -> 200 (Studio answers)', code == 200, str(code))
     code, body = internal('GET', f'{cp}/hosts')
@@ -189,6 +191,49 @@ def main() -> None:
     code, body = public('POST', f'{base}/storage/v1/object/m5/red.png', {**h(service), 'Content-Type': 'image/png'}, png())
     code, body = public('GET', f'{base}/storage/v1/render/image/authenticated/m5/red.png?width=16&height=16', h(service))
     check('storage image transform (imgproxy) -> 200 image', code == 200 and len(body) > 0, f'{code} {len(body)} bytes')
+
+    # Settings Studio writes for this project (SPEC.md §16): the host dirs, the binds, a live GoTrue
+    # reload, an email template fetched from Studio over `coolify`, and a storage limit after a restart.
+    pdir = f'{args.projects_host_dir}/{ref}'
+    owners = on_b(f'stat -c "%n %u:%g %a" {pdir} {pdir}/gotrue {pdir}/storage {pdir}/state').split('\n')
+    check('settings dirs <ref>/{gotrue,storage,state} exist, owned 1000', len([o for o in owners if ' 1000:1000 ' in o]) == 4, ' | '.join(o.replace(pdir, '<dir>') for o in owners if o))
+    mounts = on_b(f"docker inspect -f '{{{{range .Mounts}}}}{{{{.Source}}}}>{{{{.Destination}}}}:{{{{.RW}}}} {{{{end}}}}{{{{json .Config.Cmd}}}}' supabase-auth-{uuid} supabase-storage-{uuid}")
+    check('GoTrue binds <ref>/gotrue read-only with --config-dir; storage binds <ref>/storage',
+          f'{pdir}/gotrue>/etc/gotrue:false' in mounts and '--config-dir' in mounts and f'{pdir}/storage>/etc/studio-config:false' in mounts,
+          mounts.replace(pdir, '<dir>').replace('\n', ' ')[:300])
+    sb = {'Authorization': f'Basic {basic}', 'Content-Type': 'application/json'}
+    code, _ = public('PATCH', f'{studio}/api/platform/auth/{ref}/config', sb, json.dumps({
+        'EXTERNAL_ANONYMOUS_USERS_ENABLED': True,
+        'MAILER_TEMPLATES_CONFIRMATION_CONTENT': '<p>m8-verify {{ .ConfirmationURL }}</p>',
+    }).encode())
+    check('Studio saves the project auth config -> 200', code == 200, str(code))
+    t, anonymous = time.time(), None
+    while time.time() - t < 60:
+        code, body = public('GET', f'{base}/auth/v1/settings', {'apikey': anon})
+        anonymous = json.loads(body).get('external', {}).get('anonymous_users') if code == 200 else None
+        if anonymous is True:
+            break
+        time.sleep(2)
+    results['auth_reload_s'] = round(time.time() - t)
+    check('GoTrue applied the save without a restart (/auth/v1/settings external.anonymous_users)', anonymous is True, f'{results["auth_reload_s"]}s')
+    reloaded = on_b(f'docker logs supabase-auth-{uuid} 2>&1 | grep -c "reloading api with new configuration" || true').strip()
+    check('GoTrue logged "reloading api with new configuration"', reloaded != '0', reloaded)
+    tmpl = on_b(f"docker exec supabase-auth-{uuid} sh -c '. /etc/gotrue/99_studio.env; wget -qO- \"$GOTRUE_MAILER_TEMPLATES_CONFIRMATION\"'")
+    check('GoTrue fetches the saved email template from Studio over coolify', 'm8-verify' in tmpl, tmpl[:80])
+    code, _ = public('PATCH', f'{studio}/api/platform/projects/{ref}/config/storage', sb, json.dumps({'fileSizeLimit': 1000}).encode())
+    check('Studio saves the project storage config -> 200', code == 200, str(code))
+    written = on_b(f'docker exec supabase-storage-{uuid} cat /etc/studio-config/storage.env')
+    check('storage.env reaches the storage container', 'UPLOAD_FILE_SIZE_LIMIT="1000"' in written and 'ENABLE_IMAGE_TRANSFORMATION="true"' in written, written.replace('\n', ' ')[:200])
+    on_b(f'docker restart supabase-storage-{uuid} >/dev/null')
+    for _ in range(60):
+        if on_b(f"docker inspect -f '{{{{.State.Health.Status}}}}' supabase-storage-{uuid}").strip() == 'healthy':
+            break
+        time.sleep(2)
+    code_big, _ = public('POST', f'{base}/storage/v1/object/m5/big.bin', {**h(service), 'Content-Type': 'application/octet-stream'}, b'x' * 2000)
+    code_small, _ = public('POST', f'{base}/storage/v1/object/m5/small.bin', {**h(service), 'Content-Type': 'application/octet-stream'}, b'x' * 500)
+    check('after a storage restart the saved limit applies (2000 B refused, 500 B stored)', code_big in (400, 413) and code_small == 200, f'{code_big} / {code_small}')
+    code, body = public('GET', f'{base}/storage/v1/render/image/authenticated/m5/red.png?width=16&height=16', h(service))
+    check('image transforms still on after the save (mirrored stack setting)', code == 200 and len(body) > 0, str(code))
 
     minio = f'docker exec -i minio-{U} sh -c \'read U; read P; export MC_HOST_l="http://$U:$P@127.0.0.1:9000"; {{}}\''
     listing = on_b(minio.format(f'mc ls --recursive l/{ref}'), f'{env["MINIO_ROOT_USER"]}\n{env["MINIO_ROOT_PASSWORD"]}\n')
@@ -282,6 +327,7 @@ def main() -> None:
             break
         time.sleep(3)
     check('no volumes, networks or service dir left', leftovers == ['0', '0', '0'], ' '.join(leftovers))
+    check('settings dir <ref>/ removed', on_b(f'ls -d {pdir} 2>/dev/null | wc -l').strip() == '0')
     log(f'free memory on B: {on_b("free -m | awk \'/Mem/ {print $7}\'").strip()} MB available')
     print(json.dumps(results, indent=2))
     sys.exit(0 if all(v == 'PASS' for k, v in results.items() if isinstance(v, str)) else 1)
