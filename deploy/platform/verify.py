@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """End-to-end check of the deployed platform stack (the M0 checks, automated). Run by hand:
 
-    deploy.py ... ; verify.py /tmp/platform-staging.env --platform <platform-service-uuid>
+    verify.py --app <platform Coolify application uuid>
+
+The platform's secrets come from the application's Environment Variables in Coolify (the Coolify
+API, token in ~/.coolify-token); nothing is written to disk.
 
 Checks the dashboard (Studio at studio.<suffix>, basic auth). Creates one project through the
 control-plane API, waits for ACTIVE_HEALTHY, checks REST, Auth,
@@ -29,6 +32,9 @@ from pathlib import Path
 
 SSH = ['ssh', '-o', 'BatchMode=yes', '-J', 'root@159.195.224.144', 'root@10.10.0.1']
 CURL = 'docker run --rm -i --network coolify curlimages/curl:8.10.1 -s -K -'
+COOLIFY_API = 'https://coolify-admin.aioomi.com/api/v1'
+# The platform containers' aliases on the `coolify` network (platform-compose.yaml).
+CP = 'http://supa-platform-control-plane:8080'
 results: dict = {}
 T0 = time.time()
 
@@ -93,6 +99,40 @@ def png() -> bytes:
             + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
 
 
+def coolify(method: str, path: str):
+    token = (Path.home() / '.coolify-token').read_text().strip()
+    req = urllib.request.Request(COOLIFY_API + path, method=method, headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'})
+    with urllib.request.urlopen(req, timeout=60) as res:
+        text = res.read().decode()
+        return json.loads(text) if text else None
+
+
+def platform_env(app: str) -> dict:
+    """The platform's generated secrets, under the names this script used to read from a file."""
+    envs = {e['key']: e['value'] for e in coolify('GET', f'/applications/{app}/envs') if not e.get('is_preview')}
+    names = {
+        'CONTROL_PLANE_TOKEN': 'SERVICE_PASSWORD_CONTROLPLANE',
+        'PLATFORM_ADMIN_JWT_SECRET': 'SERVICE_PASSWORD_64_ADMINJWT',
+        'KONG_ADMIN_TOKEN': 'SERVICE_PASSWORD_KONGADMIN',
+        'MINIO_ROOT_USER': 'SERVICE_USER_MINIO',
+        'MINIO_ROOT_PASSWORD': 'SERVICE_PASSWORD_MINIO',
+        'STUDIO_USER': 'SERVICE_USER_STUDIO',
+        'STUDIO_PASSWORD': 'SERVICE_PASSWORD_STUDIO',
+    }
+    missing = [v for v in names.values() if not envs.get(v)]
+    if missing:
+        sys.exit(f'Coolify application {app} lacks {missing}')
+    return {k: envs[v] for k, v in names.items()}
+
+
+def container(app: str, service: str) -> str:
+    """Coolify names application containers <service>-<uuid>-<timestamp>; find one by its labels."""
+    name = on_b(f'docker ps --filter label=com.docker.compose.project={app} --filter label=com.docker.compose.service={service} --format "{{{{.Names}}}}"').strip()
+    if not name or '\n' in name:
+        raise RuntimeError(f'expected one running {service} container, got {name!r}')
+    return name
+
+
 def mem_mb(name_filter: str) -> dict:
     out = on_b(f"docker stats --no-stream --format '{{{{.Name}}}}\\t{{{{.MemUsage}}}}' $(docker ps -q --filter name={name_filter})")
     usage = {}
@@ -106,14 +146,13 @@ def mem_mb(name_filter: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument('env_file')
-    ap.add_argument('--platform', required=True, help='platform Coolify service uuid')
+    ap.add_argument('--app', required=True, help='platform Coolify application uuid')
     ap.add_argument('--suffix', default='supa.aioomi.com')
-    ap.add_argument('--projects-host-dir', default='/data/supa-platform-staging/projects')
+    ap.add_argument('--projects-host-dir', default='/data/supa-platform/projects')
     args = ap.parse_args()
-    env = dict(l.split('=', 1) for l in Path(args.env_file).read_text().splitlines() if '=' in l)
-    U = args.platform
-    cp = f'http://control-plane-{U}:8080'
+    env = platform_env(args.app)
+    U = args.app
+    cp = CP
     auth = [f'Authorization: Bearer {env["CONTROL_PLANE_TOKEN"]}', 'Content-Type: application/json']
     admin_jwt = lambda: jwt({'role': 'service_role', 'iat': int(time.time()), 'exp': int(time.time()) + 300}, env['PLATFORM_ADMIN_JWT_SECRET'])
 
@@ -122,7 +161,7 @@ def main() -> None:
     studio = f'https://studio.{args.suffix}'
     code, _ = public('GET', f'{studio}/api/platform/profile')
     check('dashboard without credentials -> 401', code == 401, str(code))
-    basic = base64.b64encode(f'{env["SERVICE_USER_ADMIN"]}:{env["SERVICE_PASSWORD_ADMIN"]}'.encode()).decode()
+    basic = base64.b64encode(f'{env["STUDIO_USER"]}:{env["STUDIO_PASSWORD"]}'.encode()).decode()
     code, _ = public('GET', f'{studio}/api/platform/profile', {'Authorization': f'Basic {basic}'})
     check('dashboard with credentials -> 200 (Studio answers)', code == 200, str(code))
     code, body = internal('GET', f'{cp}/hosts')
@@ -235,7 +274,7 @@ def main() -> None:
     code, body = public('GET', f'{base}/storage/v1/render/image/authenticated/m5/red.png?width=16&height=16', h(service))
     check('image transforms still on after the save (mirrored stack setting)', code == 200 and len(body) > 0, str(code))
 
-    minio = f'docker exec -i minio-{U} sh -c \'read U; read P; export MC_HOST_l="http://$U:$P@127.0.0.1:9000"; {{}}\''
+    minio = f'docker exec -i {container(U, "minio")} sh -c \'read U; read P; export MC_HOST_l="http://$U:$P@127.0.0.1:9000"; {{}}\''
     listing = on_b(minio.format(f'mc ls --recursive l/{ref}'), f'{env["MINIO_ROOT_USER"]}\n{env["MINIO_ROOT_PASSWORD"]}\n')
     check('object landed in MinIO bucket <ref>', 'hello.txt' in listing, listing.strip()[:200])
     # The project's own key reaches its bucket and nothing else.
@@ -246,7 +285,7 @@ def main() -> None:
 
     psql = on_b(
         f"docker run --rm -i --network coolify postgres:17-alpine sh -c 'read PGPASSWORD; export PGPASSWORD; "
-        f"psql -h supavisor-{U} -p 6543 -U postgres.{ref} -d postgres -tAc \"select \\$\\$project-db roles:\\$\\$||count(*) from pg_roles where rolname in (\\$\\$authenticator\\$\\$, \\$\\$supabase_admin\\$\\$)\"' 2>&1",
+        f"psql -h supa-platform-supavisor -p 6543 -U postgres.{ref} -d postgres -tAc \"select \\$\\$project-db roles:\\$\\$||count(*) from pg_roles where rolname in (\\$\\$authenticator\\$\\$, \\$\\$supabase_admin\\$\\$)\"' 2>&1",
         f'{s["db_password"]}\n',
     )
     check('pooler psql as postgres.<ref> through Supavisor reaches the project db', 'project-db roles:2' in psql, psql.strip()[:120])
@@ -267,9 +306,7 @@ def main() -> None:
     # A plain `docker restart` keeps Kong's config (DB-less Kong keeps it in LMDB inside the
     # container). A Coolify restart recreates every container of the platform stack, Kong and the
     # control plane included: Kong starts empty and the control plane re-applies from the registry.
-    token = (Path.home() / '.coolify-token').read_text().strip()
-    req = urllib.request.Request(f'https://coolify-admin.aioomi.com/api/v1/services/{U}/restart', method='POST', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'})
-    urllib.request.urlopen(req, timeout=60).read()
+    coolify('POST', f'/applications/{U}/restart')
     t = time.time()
     code, seen_down = 0, False
     while time.time() - t < 300:
@@ -283,7 +320,7 @@ def main() -> None:
         time.sleep(2)
     results['platform_restart_recovery_s'] = round(time.time() - t)
     check('routes back after a Coolify restart of the platform stack', code == 200 and seen_down, f'{results["platform_restart_recovery_s"]}s')
-    drift = on_b(f'docker logs control-plane-{U} 2>&1 | grep -c kong.drift || true').strip()
+    drift = on_b(f'docker logs {container(U, "control-plane")} 2>&1 | grep -c kong.drift || true').strip()
     check('control plane re-applied the Kong config after the restart', drift != '0', f'kong.drift events: {drift}')
     for _ in range(60):
         try:
@@ -293,6 +330,8 @@ def main() -> None:
             pass
         time.sleep(2)
 
+    # The restart replaced the containers, and with them their names.
+    minio = f'docker exec -i {container(U, "minio")} sh -c \'read U; read P; export MC_HOST_l="http://$U:$P@127.0.0.1:9000"; {{}}\''
     results['ram_platform_mb'] = mem_mb(U)
     results['ram_project_mb'] = mem_mb(uuid)
     log(f'RAM platform total {sum(results["ram_platform_mb"].values()):.0f} MB, project total {sum(results["ram_project_mb"].values()):.0f} MB')
@@ -302,11 +341,11 @@ def main() -> None:
     code, _ = internal('GET', f'{cp}/projects/{ref}', auth)
     check('registry: project gone', code == 404, str(code))
     adm = [f'Authorization: Bearer {admin_jwt()}']
-    code, _ = internal('GET', f'http://supavisor-{U}:4000/api/tenants/{ref}', adm)
+    code, _ = internal('GET', f'http://supa-platform-supavisor:4000/api/tenants/{ref}', adm)
     check('Supavisor tenant gone', code == 404, str(code))
-    code, _ = internal('GET', f'http://realtime-{U}:4000/api/tenants/{ref}', adm)
+    code, _ = internal('GET', f'http://supa-platform-realtime:4000/api/tenants/{ref}', adm)
     check('Realtime tenant gone', code == 404, str(code))
-    code, body = internal('GET', f'http://kong-{U}:8001/services?size=1000', [f'x-admin-token: {env["KONG_ADMIN_TOKEN"]}'])
+    code, body = internal('GET', f'http://supa-platform-kong:8001/services?size=1000', [f'x-admin-token: {env["KONG_ADMIN_TOKEN"]}'])
     check('Kong: no services or routes for the ref', code == 200 and ref not in body, f'{code} services={len(json.loads(body)["data"])}')
     code, body = internal('GET', f'{cp}/hosts')
     check('/hosts no longer lists the host', ref not in body)

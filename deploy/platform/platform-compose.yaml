@@ -1,39 +1,33 @@
-# The shared platform stack: one Coolify service on the database server (deploy/platform/SPEC.md
-# §5, §12). The control plane in this stack creates the project stacks (project-compose.yaml).
+# The shared platform stack (deploy/platform/SPEC.md §5, §12), installed as one Coolify
+# application: + New → Public Repository → this repo, branch platform/control-plane, Build Pack
+# "Docker Compose", Docker Compose Location /deploy/platform/platform-compose.yaml, server = the
+# database server. The control plane in this stack creates the project stacks (project-compose.yaml).
 #
-# Networking: the Coolify service has "Connect to Predefined Network" on (API:
-# connect_to_docker_network: true), so every container here also sits on the shared `coolify`
-# network as <service>-<this-service-uuid>, and reaches project containers as
-# supabase-{db,auth,rest,storage}-<project-service-uuid>. Inside this stack the short names
-# (kong, realtime, minio, ...) work. Nothing is published except Kong's proxy on the WireGuard
-# address, where the gateway host's Traefik sends *.<PROJECT_DOMAIN_SUFFIX>, and the control
-# plane's port for the gateway host to read /hosts (the API itself needs CONTROL_PLANE_TOKEN).
-# Studio (multi-project) is reached only through Kong, at studio.<PROJECT_DOMAIN_SUFFIX> with
-# basic auth (SERVICE_USER_ADMIN / SERVICE_PASSWORD_ADMIN; the control plane renders that route).
-# Those two names are what Coolify's "Service configuration" panel (service → General) shows as
-# "Supabase · Dashboard User / Dashboard Password" for a stack with a `kong` image
-# (Coolify v4.4.6 app/Models/Service.php extraFields()); the control plane gets them as
-# DASHBOARD_USERNAME / DASHBOARD_PASSWORD, as the one-click Supabase template gives them to Kong.
+# Secrets are Coolify magic variables (SERVICE_PASSWORD_*, SERVICE_USER_*, SERVICE_HEX_*): Coolify
+# generates them on the first deploy and shows them under Environment Variables. Names have no
+# underscore after the generator (Coolify's parseCommandFromMagicEnvVariable). The only value to
+# fill in is CONTROL_PLANE_COOLIFY_TOKEN (a Coolify API token, write access); the other plain
+# variables come with defaults.
 #
-# Env (Coolify service env, all secrets generated outside Coolify):
-#   PLATFORM_DB_PASSWORD, PLATFORM_ADMIN_JWT_SECRET (Supavisor and Realtime admin API, later
-#   Studio), SUPAVISOR_SECRET_KEY_BASE, SUPAVISOR_VAULT_ENC_KEY (32 chars),
-#   REALTIME_SECRET_KEY_BASE, REALTIME_DB_ENC_KEY (16 chars), PG_META_CRYPTO_KEY,
-#   MINIO_ROOT_USER, MINIO_ROOT_PASSWORD, KONG_ADMIN_TOKEN, CONTROL_PLANE_TOKEN,
-#   PLATFORM_SECRETS_KEY, CP_COOLIFY_URL, CP_COOLIFY_TOKEN, CP_COOLIFY_PROJECT_UUID,
-#   CP_COOLIFY_ENVIRONMENT, CP_COOLIFY_SERVER_UUID (prefixed so they cannot collide with the
-#   COOLIFY_* variables Coolify sets itself), PROJECT_DOMAIN_SUFFIX, PROJECT_S3_ENDPOINT (http://minio-<this-uuid>:9000),
-#   PROJECT_IMGPROXY_URL (http://imgproxy-<this-uuid>:8080), SERVICE_USER_ADMIN,
-#   SERVICE_PASSWORD_ADMIN, STUDIO_INTERNAL_URL (http://studio-<this-uuid>:3000).
+# Networking: every container joins the shared `coolify` network (declared below, so no
+# "Connect to Predefined Network" checkbox). Other stacks reach this one only by the
+# supa-platform-* aliases: project stacks use minio, imgproxy and studio; verify.py the rest. The
+# aliases are fixed, so there is one platform per server. Inside this stack the short names
+# (kong, realtime, minio, ...) work; project containers are supabase-{db,auth,rest,storage}-<uuid>.
+# Nothing is published except Kong's proxy and the control plane's port on the WireGuard address:
+# the gateway host's Traefik sends *.<PROJECT_DOMAIN_SUFFIX> to Kong, and its sync container
+# (gateway/compose.yaml) reads /hosts (the API itself needs the control-plane token). Studio
+# (multi-project) is reached only through Kong, at studio.<PROJECT_DOMAIN_SUFFIX> with basic auth
+# (SERVICE_USER_STUDIO / SERVICE_PASSWORD_STUDIO; the control plane renders that route).
 #
-# {{PROJECTS_HOST_DIR}} (deploy.py --projects-host-dir) is the host directory with every project's
-# settings files, <ref>/{gotrue,storage,state}: Studio writes them, each project's GoTrue and
-# storage-api read their own, and the control plane creates and removes <ref>/ (SPEC.md §16).
+# /data/supa-platform/projects on the host holds every project's settings files,
+# <ref>/{gotrue,storage,state}: Studio writes them, each project's GoTrue and storage-api read
+# their own, and the control plane creates and removes <ref>/ (SPEC.md §16).
 services:
   platform-db:
     image: 'postgres:17-alpine'
     environment:
-      - 'POSTGRES_PASSWORD=${PLATFORM_DB_PASSWORD}'
+      - 'POSTGRES_PASSWORD=${SERVICE_PASSWORD_PLATFORMDB}'
     # Metadata only (Supavisor, Realtime, the registry): small buffers.
     command: postgres -c shared_buffers=64MB -c work_mem=2MB -c maintenance_work_mem=32MB -c max_connections=100
     volumes:
@@ -70,7 +64,7 @@ services:
       - 'KONG_ADMIN_LISTEN=0.0.0.0:8001'
       - 'KONG_PROXY_LISTEN=0.0.0.0:8000'
       - KONG_NGINX_ADMIN_INCLUDE=/tmp/admin-guard.conf
-      - 'KONG_ADMIN_TOKEN=${KONG_ADMIN_TOKEN}'
+      - 'KONG_ADMIN_TOKEN=${SERVICE_PASSWORD_KONGADMIN}'
       # The control plane applies the whole declarative config with POST /config (src/kong.ts).
       - 'KONG_PLUGINS=request-transformer,cors,key-auth,acl,request-termination,post-function,basic-auth'
       - 'KONG_DNS_ORDER=LAST,A,CNAME'
@@ -85,6 +79,9 @@ services:
       - 'KONG_PROXY_ACCESS_LOG=/dev/stdout combined'
     ports:
       - '10.10.0.1:8010:8000'
+    networks:
+      coolify:
+        aliases: [supa-platform-kong]
     healthcheck:
       test: [CMD, kong, health]
       interval: 5s
@@ -98,16 +95,20 @@ services:
         condition: service_healthy
     environment:
       - PORT=4000
-      - 'DATABASE_URL=ecto://postgres:${PLATFORM_DB_PASSWORD}@platform-db:5432/_supabase'
+      - 'DATABASE_URL=ecto://postgres:${SERVICE_PASSWORD_PLATFORMDB}@platform-db:5432/_supabase'
       - CLUSTER_POSTGRES=true
-      - 'SECRET_KEY_BASE=${SUPAVISOR_SECRET_KEY_BASE}'
-      - 'VAULT_ENC_KEY=${SUPAVISOR_VAULT_ENC_KEY}'
-      - 'API_JWT_SECRET=${PLATFORM_ADMIN_JWT_SECRET}'
-      - 'METRICS_JWT_SECRET=${PLATFORM_ADMIN_JWT_SECRET}'
+      - 'SECRET_KEY_BASE=${SERVICE_PASSWORD_64_SUPAVISORKEYBASE}'
+      # 32 characters (Coolify's SERVICE_PASSWORD is 32 letters and digits).
+      - 'VAULT_ENC_KEY=${SERVICE_PASSWORD_SUPAVISORVAULT}'
+      - 'API_JWT_SECRET=${SERVICE_PASSWORD_64_ADMINJWT}'
+      - 'METRICS_JWT_SECRET=${SERVICE_PASSWORD_64_ADMINJWT}'
       - REGION=local
       - 'ERL_AFLAGS=-proto_dist inet_tcp'
       - DB_POOL_SIZE=3
     command: ['/bin/sh', '-c', '/app/bin/migrate && /app/bin/server']
+    networks:
+      coolify:
+        aliases: [supa-platform-supavisor]
     healthcheck:
       test: [CMD, curl, '-sSfL', '-o', /dev/null, 'http://127.0.0.1:4000/api/health']
       interval: 5s
@@ -125,13 +126,14 @@ services:
       - DB_HOST=platform-db
       - DB_PORT=5432
       - DB_USER=postgres
-      - 'DB_PASSWORD=${PLATFORM_DB_PASSWORD}'
+      - 'DB_PASSWORD=${SERVICE_PASSWORD_PLATFORMDB}'
       - DB_NAME=postgres
       - 'DB_AFTER_CONNECT_QUERY=SET search_path TO _realtime'
-      - 'DB_ENC_KEY=${REALTIME_DB_ENC_KEY}'
-      - 'API_JWT_SECRET=${PLATFORM_ADMIN_JWT_SECRET}'
-      - 'SECRET_KEY_BASE=${REALTIME_SECRET_KEY_BASE}'
-      - 'METRICS_JWT_SECRET=${PLATFORM_ADMIN_JWT_SECRET}'
+      # Realtime needs exactly 16 characters; the command below cuts this 32-character value.
+      - 'DB_ENC_KEY=${SERVICE_PASSWORD_REALTIMEENC}'
+      - 'API_JWT_SECRET=${SERVICE_PASSWORD_64_ADMINJWT}'
+      - 'SECRET_KEY_BASE=${SERVICE_PASSWORD_64_REALTIMEKEYBASE}'
+      - 'METRICS_JWT_SECRET=${SERVICE_PASSWORD_64_ADMINJWT}'
       - 'ERL_AFLAGS=-proto_dist inet_tcp'
       - "DNS_NODES=''"
       - RLIMIT_NOFILE=10000
@@ -141,7 +143,10 @@ services:
       - RUN_JANITOR=false
       - LOG_LEVEL=error
       - DISABLE_HEALTHCHECK_LOGGING=true
-    command: sh -c "/app/bin/migrate && /app/bin/server"
+    command: sh -c 'export DB_ENC_KEY=$$(printf %.16s "$$DB_ENC_KEY") && /app/bin/migrate && /app/bin/server'
+    networks:
+      coolify:
+        aliases: [supa-platform-realtime]
     healthcheck:
       test: [CMD, curl, '-sSf', '-o', /dev/null, 'http://127.0.0.1:4000/healthcheck']
       interval: 5s
@@ -161,7 +166,7 @@ services:
       - PG_META_DB_NAME=none
       - PG_META_DB_USER=none
       - PG_META_DB_PASSWORD=none
-      - 'CRYPTO_KEY=${PG_META_CRYPTO_KEY}'
+      - 'CRYPTO_KEY=${SERVICE_PASSWORD_PGMETA}'
 
   imgproxy:
     image: 'darthsim/imgproxy:v3.30.1'
@@ -171,6 +176,9 @@ services:
       - IMGPROXY_USE_ETAG=true
       - IMGPROXY_AUTO_WEBP=true
       - IMGPROXY_MAX_SRC_RESOLUTION=16.8
+    networks:
+      coolify:
+        aliases: [supa-platform-imgproxy]
     healthcheck:
       test: [CMD, imgproxy, health]
       interval: 5s
@@ -182,12 +190,15 @@ services:
     # Buckets (one per project, named after the ref) and their scoped keys are created by the
     # control plane (apps/control-plane/src/minio.ts), so there is no bootstrap container.
     environment:
-      - 'MINIO_ROOT_USER=${MINIO_ROOT_USER}'
-      - 'MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}'
+      - 'MINIO_ROOT_USER=${SERVICE_USER_MINIO}'
+      - 'MINIO_ROOT_PASSWORD=${SERVICE_PASSWORD_MINIO}'
       - MINIO_BROWSER=off
     command: 'server /data'
     volumes:
       - 'minio-data:/data'
+    networks:
+      coolify:
+        aliases: [supa-platform-minio]
     healthcheck:
       test: [CMD, mc, ready, local]
       interval: 5s
@@ -196,9 +207,8 @@ services:
 
   projects-dir:
     # One-shot: the control plane runs as uid 1000 (also GoTrue's user) and creates <ref>/ in here,
-    # so the directory has to be its own. Same image as the control plane, as root, then exits.
-    image: 'ghcr.io/krowli/supabase-control-plane:{{CONTROL_PLANE_TAG}}'
-    pull_policy: missing
+    # so the directory has to be its own. Runs as root on every deploy, then exits.
+    image: 'alpine:3.22'
     user: '0'
     restart: 'no'
     exclude_from_hc: true
@@ -207,13 +217,14 @@ services:
       - '-c'
       - 'chown 1000:1000 /projects && chmod 755 /projects'
     volumes:
-      - '{{PROJECTS_HOST_DIR}}:/projects'
+      - '/data/supa-platform/projects:/projects'
 
   control-plane:
-    # Built by .github/workflows/control-plane-publish.yml. deploy.sh fills in the tag.
-    image: 'ghcr.io/krowli/supabase-control-plane:{{CONTROL_PLANE_TAG}}'
-    # Tags are immutable (sha-<commit>); an image built on the server is used as it is.
-    pull_policy: missing
+    # Coolify builds it on the server from this repo on every deploy (context: the repo root, so
+    # the project template is in the build).
+    build:
+      context: .
+      dockerfile: apps/control-plane/Dockerfile
     depends_on:
       projects-dir:
         condition: service_completed_successfully
@@ -225,40 +236,46 @@ services:
         condition: service_healthy
     environment:
       - PORT=8080
-      - 'COOLIFY_URL=${CP_COOLIFY_URL}'
-      - 'COOLIFY_TOKEN=${CP_COOLIFY_TOKEN}'
-      - 'COOLIFY_PROJECT_UUID=${CP_COOLIFY_PROJECT_UUID}'
-      - 'COOLIFY_ENVIRONMENT=${CP_COOLIFY_ENVIRONMENT}'
-      - 'COOLIFY_SERVER_UUID=${CP_COOLIFY_SERVER_UUID}'
-      - 'REGISTRY_DATABASE_URL=postgres://postgres:${PLATFORM_DB_PASSWORD}@platform-db:5432/_supabase'
-      - 'PLATFORM_SECRETS_KEY=${PLATFORM_SECRETS_KEY}'
-      - 'CONTROL_PLANE_TOKEN=${CONTROL_PLANE_TOKEN}'
-      - 'PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX}'
-      - 'PROJECT_S3_ENDPOINT=${PROJECT_S3_ENDPOINT}'
-      - 'PROJECT_IMGPROXY_URL=${PROJECT_IMGPROXY_URL}'
+      # The Coolify API for project stacks. Project and server are this application's own
+      # (COOLIFY_RESOURCE_UUID, set by Coolify); the project stacks go into the environment
+      # "projects" of the same Coolify project, created when missing (src/coolify.ts).
+      - 'COOLIFY_URL=${CONTROL_PLANE_COOLIFY_URL:-https://coolify-admin.aioomi.com/api/v1}'
+      - 'COOLIFY_TOKEN=${CONTROL_PLANE_COOLIFY_TOKEN:?Coolify API token with write access}'
+      - COOLIFY_ENVIRONMENT=projects
+      - 'REGISTRY_DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_PLATFORMDB}@platform-db:5432/_supabase'
+      # 64 hex characters: encrypts every project's secrets in the registry. Losing it loses them.
+      - 'PLATFORM_SECRETS_KEY=${SERVICE_HEX_64_SECRETSKEY}'
+      - 'CONTROL_PLANE_TOKEN=${SERVICE_PASSWORD_CONTROLPLANE}'
+      - 'PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.aioomi.com}'
+      - 'PROJECT_S3_ENDPOINT=http://supa-platform-minio:9000'
+      - 'PROJECT_IMGPROXY_URL=http://supa-platform-imgproxy:8080'
       - 'KONG_ADMIN_URL=http://kong:8001'
-      - 'KONG_ADMIN_TOKEN=${KONG_ADMIN_TOKEN}'
+      - 'KONG_ADMIN_TOKEN=${SERVICE_PASSWORD_KONGADMIN}'
       - 'SUPAVISOR_URL=http://supavisor:4000'
       - 'REALTIME_URL=http://realtime:4000'
-      - 'PLATFORM_ADMIN_JWT_SECRET=${PLATFORM_ADMIN_JWT_SECRET}'
+      - 'PLATFORM_ADMIN_JWT_SECRET=${SERVICE_PASSWORD_64_ADMINJWT}'
       - 'MINIO_URL=http://minio:9000'
-      - 'MINIO_ROOT_USER=${MINIO_ROOT_USER}'
-      - 'MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}'
+      - 'MINIO_ROOT_USER=${SERVICE_USER_MINIO}'
+      - 'MINIO_ROOT_PASSWORD=${SERVICE_PASSWORD_MINIO}'
       # Kong routes studio.<suffix> to Studio with basic auth (src/kong.ts, renderDashboard).
       - 'DASHBOARD_URL=http://studio:3000'
-      - 'DASHBOARD_USERNAME=${SERVICE_USER_ADMIN}'
-      - 'DASHBOARD_PASSWORD=${SERVICE_PASSWORD_ADMIN}'
+      - 'DASHBOARD_USERNAME=${SERVICE_USER_STUDIO}'
+      - 'DASHBOARD_PASSWORD=${SERVICE_PASSWORD_STUDIO}'
       # Rendered into each project compose, and bound here at the same path (src/project-dirs.ts).
-      - 'PROJECTS_HOST_DIR={{PROJECTS_HOST_DIR}}'
+      - PROJECTS_HOST_DIR=/data/supa-platform/projects
     volumes:
-      - '{{PROJECTS_HOST_DIR}}:{{PROJECTS_HOST_DIR}}'
+      - '/data/supa-platform/projects:/data/supa-platform/projects'
     ports:
       - '10.10.0.1:8011:8080'
+    networks:
+      coolify:
+        aliases: [supa-platform-control-plane]
 
   studio:
-    # Multi-project Studio (built with NEXT_PUBLIC_IS_MULTI_PROJECT=true; deploy.py fills in the
-    # image, pinned by digest). Every project comes from the control plane (SPEC.md §11-§12).
-    image: '{{STUDIO_IMAGE}}'
+    # Multi-project Studio (.github/workflows/studio-fork-publish.yml on this branch with
+    # multi_project=true), pinned by digest: a new Studio is a commit here, then Redeploy.
+    # Every project comes from the control plane (SPEC.md §11-§12).
+    image: 'ghcr.io/krowli/supabase-full-access-studio:platform-control-plane@sha256:a9d0db9a2b7617928345f5934ab768c2563e94d0f1d10206b307cc3e7cf16ad2'
     depends_on:
       control-plane:
         condition: service_started
@@ -278,30 +295,38 @@ services:
       - HOSTNAME=0.0.0.0
       # The registry: the control plane in this stack (same service network, short name).
       - 'STUDIO_PROJECT_REGISTRY_URL=http://control-plane:8080'
-      - 'STUDIO_PROJECT_REGISTRY_TOKEN=${CONTROL_PLANE_TOKEN}'
-      - 'STUDIO_PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX}'
+      - 'STUDIO_PROJECT_REGISTRY_TOKEN=${SERVICE_PASSWORD_CONTROLPLANE}'
+      - 'STUDIO_PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.aioomi.com}'
       # No single-project stack here: `default` is the project list, not a database (SPEC.md §15).
       - STUDIO_DEFAULT_PROJECT=none
       - 'DEFAULT_ORGANIZATION_NAME=Platform (staging)'
       # Shared services. pg-meta only reaches a database through Studio's encrypted header.
       - 'STUDIO_PG_META_URL=http://postgres-meta:8080'
-      - 'PG_META_CRYPTO_KEY=${PG_META_CRYPTO_KEY}'
-      - 'PLATFORM_ADMIN_JWT_SECRET=${PLATFORM_ADMIN_JWT_SECRET}'
+      - 'PG_META_CRYPTO_KEY=${SERVICE_PASSWORD_PGMETA}'
+      - 'PLATFORM_ADMIN_JWT_SECRET=${SERVICE_PASSWORD_64_ADMINJWT}'
       - 'SUPAVISOR_URL=http://supavisor:4000'
       - POOLER_PROXY_PORT_TRANSACTION=6543
       - 'REALTIME_URL=http://realtime:4000'
       # Project GoTrue containers fetch email templates from here over the `coolify` network.
-      - 'STUDIO_INTERNAL_URL=${STUDIO_INTERNAL_URL}'
+      - 'STUDIO_INTERNAL_URL=http://supa-platform-studio:3000'
       - SNIPPETS_MANAGEMENT_FOLDER=/app/snippets
       - ENABLED_FEATURES_AUTHENTICATION_THIRD_PARTY_AUTH=false
       - UPLOAD_FILE_SIZE_LIMIT=524288000
     volumes:
       - 'studio-snippets:/app/snippets'
       # Per-project GoTrue, storage and state files Studio writes (<ref>/{gotrue,storage,state})
-      # under its fixed projectsDir; on the host they live under {{PROJECTS_HOST_DIR}}.
-      - '{{PROJECTS_HOST_DIR}}:/data/pieowl/projects'
+      # under its fixed projectsDir; on the host they live under /data/supa-platform/projects.
+      - '/data/supa-platform/projects:/data/pieowl/projects'
+    networks:
+      coolify:
+        aliases: [supa-platform-studio]
 
 volumes:
   platform-db-data:
   minio-data:
   studio-snippets:
+
+networks:
+  # Coolify's shared network on every server; Coolify adds it to every service of the stack.
+  coolify:
+    external: true
