@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectDropdown } from './ProjectDropdown'
@@ -10,7 +11,7 @@ import { createMockOrganization, render } from '@/tests/helpers'
  * plain project name upstream shows self-hosted.
  */
 
-const flags = vi.hoisted(() => ({ multiProject: false }))
+const flags = vi.hoisted(() => ({ multiProject: false, projectCreation: false }))
 
 vi.mock('@/lib/constants', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/constants')>()),
@@ -49,15 +50,25 @@ vi.mock('@/hooks/misc/useSelectedOrganization', () => ({
   }),
 }))
 
-vi.mock('@/hooks/misc/useIsFeatureEnabled', () => ({ useIsFeatureEnabled: () => false }))
+vi.mock('@/hooks/misc/useIsFeatureEnabled', () => ({
+  useIsFeatureEnabled: () => flags.projectCreation,
+}))
 
 vi.mock('@/components/ui/OrganizationProjectSelector', () => ({
-  OrganizationProjectSelector: () => <div data-testid="project-selector" />,
+  OrganizationProjectSelector: ({
+    renderActions,
+  }: {
+    renderActions?: (
+      setOpen: (value: boolean) => void,
+      options?: { embedded?: boolean }
+    ) => ReactNode
+  }) => <div data-testid="project-selector">{renderActions?.(() => {}, { embedded: true })}</div>,
 }))
 
 describe('ProjectDropdown, self-hosted', () => {
   beforeEach(() => {
     flags.multiProject = false
+    flags.projectCreation = false
   })
 
   it('shows the project name alone without the multi-project flag', () => {
@@ -77,5 +88,26 @@ describe('ProjectDropdown, self-hosted', () => {
       '/project/alpha'
     )
     expect(screen.getByTestId('project-selector')).toBeInTheDocument()
+  })
+
+  it('leads "New project" to the fork form with the multi-project flag', () => {
+    flags.multiProject = true
+    flags.projectCreation = true
+    render(<ProjectDropdown embedded />)
+
+    expect(screen.getByRole('link', { name: 'New project' })).toHaveAttribute(
+      'href',
+      '/new-project'
+    )
+  })
+
+  it('leaves "New project" on upstream form without the flag', () => {
+    flags.projectCreation = true
+    render(<ProjectDropdown embedded />)
+
+    expect(screen.getByRole('link', { name: 'New project' })).toHaveAttribute(
+      'href',
+      '/new/default-org-slug'
+    )
   })
 })

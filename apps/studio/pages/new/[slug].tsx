@@ -1,11 +1,13 @@
 import Head from 'next/head'
 import { PropsWithChildren } from 'react'
 
+import { RedirectToNewProject } from '@/components/interfaces/MultiProject/RedirectToNewProject'
 import { ProjectCreationForm } from '@/components/interfaces/ProjectCreation/ProjectCreationForm'
 import { DefaultLayout } from '@/components/layouts/DefaultLayout'
 import { WizardLayoutWithoutAuth } from '@/components/layouts/WizardLayout'
 import { useCustomContent } from '@/hooks/custom-content/useCustomContent'
 import { withAuth } from '@/hooks/misc/withAuth'
+import { IS_MULTI_PROJECT } from '@/lib/constants/multi-project'
 import { buildStudioPageTitle } from '@/lib/page-title'
 import type { NextPageWithLayout } from '@/types'
 
@@ -15,6 +17,9 @@ const Wizard: NextPageWithLayout = () => {
     section: 'New Project',
     brand: appTitle || 'Supabase',
   })
+
+  // Fork: a multi-project Studio creates projects on its own page (deploy/platform/SPEC.md M6)
+  if (IS_MULTI_PROJECT) return <RedirectToNewProject />
 
   return (
     <>
