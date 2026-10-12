@@ -1489,7 +1489,7 @@ available.
 
 **Remaining issues.**
 
-- **Storage settings need a storage restart, and Studio cannot trigger it** on the platform. The
+- (Fixed in §20.) **Storage settings need a storage restart, and Studio cannot trigger it** on the platform. The
   page says to restart `supabase-storage`; today that is `docker restart supabase-storage-<uuid>`
   on B or a Coolify restart of the project service (restarts its whole stack). A control-plane
   route (e.g. `POST /projects/<ref>/restart {service: storage}`) and a button would close it.
@@ -1497,8 +1497,8 @@ available.
   the reload log line and Studio's read-back, not by sending mail.
 - Studio writes its files as root; the control plane can remove them only because it owns the
   directories. If Studio ever wrote a sub-directory there, delete would stop at `config_dirs`.
-- Project settings menu still has upstream's Billing group (Subscription / Usage links) and the
-  command menu's org entries; only the org sidebars were trimmed.
+- (No longer true, checked live in §20.) Project settings menu still has upstream's Billing group
+  (Subscription / Usage links) and the command menu's org entries; only the org sidebars were trimmed.
 - `STACK_SETTINGS` duplicates values from `project-compose.yaml` (guarded by a test); a project
   stack with different values would need them per project from the control plane.
 - B's Coolify proxy logs a failed ACME attempt for `studio.supa.example.com` on each reload (above).
@@ -1621,3 +1621,34 @@ settings, sign-up, sign-in, `/auth/v1/user` and REST as that user, then both del
 - **Studio:** Database → Backups (`IS_MULTI_PROJECT`): `components/interfaces/MultiProject/PlatformBackups.tsx`,
   routes `pages/api/platform/projects/[ref]/backups/{index,restore}.ts`
   (`lib/api/self-hosted/project-backups.ts`, `STUDIO_BACKUP_URL`). No keys are shown or set there.
+- **Deleted projects:** a project's backups outlive it by `deleted_project_retention_days`
+  (backups.yaml, default 30, 0 = at once). Each tick the service records refs with a successful
+  backup that are gone from the registry (`_platform.backup_deleted_projects`: ref, destination of
+  the last backup, `deleted_at` = first seen gone) and, once the days have passed, removes
+  `<bucket>/<prefix>/<ref>/` with `mc rm --recursive --force` (never anything above the ref; a ref
+  must match `[a-z]{20}`). A destination no longer in the config waits; a failure is retried next
+  tick. Studio's delete dialog says "Backups of this project are kept for N days, then deleted."
+  (`deleted_project_retention_days` in the view). Checked on R2: a ref's folder goes, its
+  siblings stay, a missing folder exits 0.
+
+## 20. Polish (2026-10-12)
+
+- **Storage settings apply by themselves.** storage-api reads its env once (`getConfig`), so the
+  project's `supabase-storage` command runs it under a small sh loop: every 5 s it compares the
+  `cksum` of `/etc/studio-config/storage.env` (a directory bind, so rewrites are seen) and on a
+  change stops storage-api and starts it again with the new file, inside the same container (a few
+  seconds; an upload at that moment may need a retry). If storage-api dies on its own the loop
+  exits with its code and Docker restarts the container. Tested by `test/storage-reload.test.ts`
+  (the compose command itself with a fake server) and by hand in `supabase/storage-api:v1.44.2`
+  (busybox ash). Studio's storage pages say "Changes apply in a few seconds" on the platform
+  (`StorageSettingsNotice.tsx`); a single self-hosted stack still gets the restart notice.
+- **Existing projects get template changes with `POST /projects/<ref>/stack`** (control plane,
+  token): the current `project-compose.yaml`, rendered for the ref, replaces the Coolify service's
+  compose (`PATCH /services/<uuid>` `docker_compose_raw`), then `POST /services/<uuid>/restart`.
+  Only ACTIVE_HEALTHY projects (409 otherwise, 404 unknown). The stack restarts (about 20-30 s);
+  data, settings and envs stay.
+- **Billing:** nothing to hide. Checked live on studio.supa.example.com: project settings show
+  Configuration (General, API Keys, JWT Keys, Log Drains) and Integrations only, ⌘K finds nothing
+  for billing/usage/subscription/invoices, the org page has no plan. The self-hosted settings menu
+  never had the Billing group (`SettingsMenu.utils.tsx` returns early for `!IS_PLATFORM`; guarded
+  by `SettingsMenu.selfhosted.test.tsx`).
