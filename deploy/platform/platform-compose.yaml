@@ -240,7 +240,7 @@ services:
       # (COOLIFY_RESOURCE_UUID, set by Coolify); the project stacks go into the environment
       # "projects" of the same Coolify project, created when missing (src/coolify.ts).
       - 'COOLIFY_URL=${CONTROL_PLANE_COOLIFY_URL:-https://coolify-admin.aioomi.com/api/v1}'
-      - 'COOLIFY_TOKEN=${CONTROL_PLANE_COOLIFY_TOKEN:?Coolify API token with write access}'
+      - 'COOLIFY_TOKEN=${CONTROL_PLANE_COOLIFY_TOKEN:?}'
       - COOLIFY_ENVIRONMENT=projects
       - 'REGISTRY_DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_PLATFORMDB}@platform-db:5432/_supabase'
       # 64 hex characters: encrypts every project's secrets in the registry. Losing it loses them.
