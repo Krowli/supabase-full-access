@@ -21,7 +21,13 @@ services:
   sync:
     image: 'alpine:3.22'
     restart: unless-stopped
-    exclude_from_hc: true
+    # Healthy while /hosts answered within the last minute (the platform is up and reachable).
+    healthcheck:
+      test: [CMD-SHELL, 'test -n "$$(find /tmp/ok -mmin -1 2>/dev/null)"']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     environment:
       - 'SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.aioomi.com}'
       - 'HOSTS_URL=${PLATFORM_HOSTS_URL:-http://10.10.0.1:8011/hosts}'
@@ -84,6 +90,7 @@ services:
             chmod 644 "$$tmp"
             mv "$$tmp" "$$OUT"
           fi
+          touch /tmp/ok
           )
           sleep 15
         done
