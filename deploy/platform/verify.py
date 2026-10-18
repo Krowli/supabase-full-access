@@ -12,7 +12,9 @@ Storage (+ MinIO and image transforms), the pooler and Realtime from the interne
 `coolify` network, that settings saved in Studio reach the project's GoTrue (live reload, email
 template served over `coolify`) and storage-api (after a restart), restarts Kong to check the config comes back, measures RAM, then deletes the
 project and checks every registration is gone. Secrets go to remote commands on stdin only and
-are never printed. Needs SSH to server B through the jump host.
+are never printed. Needs SSH to server B through the jump host. Where the
+platform runs is not in the repo: set VERIFY_SSH_JUMP, VERIFY_SSH_TARGET,
+VERIFY_COOLIFY_API and VERIFY_DOMAIN_SUFFIX (or pass --suffix).
 """
 
 import argparse
@@ -22,6 +24,7 @@ import hmac
 import json
 import secrets
 import struct
+import os
 import subprocess
 import sys
 import time
@@ -30,9 +33,19 @@ import urllib.request
 import zlib
 from pathlib import Path
 
-SSH = ['ssh', '-o', 'BatchMode=yes', '-J', 'root@203.0.113.10', 'root@10.10.0.1']
+def _required_env(name: str, example: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        sys.exit(f'Set {name}, e.g. {name}={example}')
+    return value
+
+
+# Where the platform runs: kept out of the repo, set on the machine that runs this.
+SSH_JUMP = _required_env('VERIFY_SSH_JUMP', 'user@jump-host')
+SSH_TARGET = _required_env('VERIFY_SSH_TARGET', 'user@platform-server')
+COOLIFY_API = _required_env('VERIFY_COOLIFY_API', 'https://coolify.example.com/api/v1')
+SSH = ['ssh', '-o', 'BatchMode=yes', '-J', SSH_JUMP, SSH_TARGET]
 CURL = 'docker run --rm -i --network coolify curlimages/curl:8.10.1 -s -K -'
-COOLIFY_API = 'https://coolify-admin.example.com/api/v1'
 # The platform containers' aliases on the `coolify` network (platform-compose.yaml).
 CP = 'http://supa-platform-control-plane:8080'
 results: dict = {}
@@ -147,7 +160,7 @@ def mem_mb(name_filter: str) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('--app', required=True, help='platform Coolify application uuid')
-    ap.add_argument('--suffix', default='supa.example.com')
+    ap.add_argument('--suffix', default=os.environ.get('VERIFY_DOMAIN_SUFFIX'), required='VERIFY_DOMAIN_SUFFIX' not in os.environ)
     ap.add_argument('--projects-host-dir', default='/data/supa-platform/projects')
     args = ap.parse_args()
     env = platform_env(args.app)
