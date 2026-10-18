@@ -1,5 +1,9 @@
 # Supabase Monorepo
 
+> **This fork runs production.** Before merging anything into `main` (upstream
+> sync PRs included), read [`GUARDRAILS.md`](GUARDRAILS.md): what must keep
+> working and the checks to run.
+
 pnpm 11 + Turborepo monorepo. Requires Node >= 22.13.
 
 ## Structure
