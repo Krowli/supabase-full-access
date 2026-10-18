@@ -143,6 +143,13 @@ settings:
 - A pooling save in Studio drops every pooled client session; that is expected,
   don't "fix" it by skipping the restart.
 
+## 8. This repo is public
+
+Never commit server IPs, hostnames, Coolify uuids, project refs, customer or
+project names, bucket names or anything secret — in code, docs, tests or commit
+messages. Read them from the environment (as `deploy/platform/verify.py` does
+with its `VERIFY_*` variables) and keep the values in the owner's private notes.
+
 ## Checks before merging into `main`
 
 ```bash
@@ -165,5 +172,6 @@ Then, by reading the diff:
 4. Nothing renames the files, volumes, variables, ports or key derivations in
    sections 2–6.
 
-After deploying the platform: `deploy/platform/verify.py --app <uuid>` passes,
+After deploying the platform: `deploy/platform/verify.py --app <uuid>` passes
+(with the `VERIFY_*` variables set; see the script's docstring),
 and the platform shows healthy in Coolify (backups not overdue).
