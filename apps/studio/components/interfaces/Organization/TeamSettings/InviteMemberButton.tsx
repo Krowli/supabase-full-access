@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { PermissionAction } from '@supabase/shared-types/out/constants'
 import { useParams } from 'common'
-import { UserPlus } from 'lucide-react'
+import { UserPlusIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { toast } from 'sonner'
@@ -49,7 +49,7 @@ import { DiscardChangesConfirmationDialog } from '@/components/ui-patterns/Dialo
 import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
 import { DocsButton } from '@/components/ui/DocsButton'
 import { InlineLink } from '@/components/ui/InlineLink'
-import { OrganizationProjectSelector } from '@/components/ui/OrganizationProjectSelector'
+import { OrganizationProjectsMultiSelect } from '@/components/ui/OrganizationProjectsMultiSelect'
 import { Shortcut } from '@/components/ui/Shortcut'
 import { UpgradePlanButton } from '@/components/ui/UpgradePlanButton'
 import { useOrganizationCreateInvitationMutation } from '@/data/organization-members/organization-invitation-create-mutation'
@@ -79,7 +79,6 @@ export const InviteMemberButton = () => {
 
   const [isOpen, setIsOpen] = useState(false)
   const [pendingInvite, setPendingInvite] = useState<z.infer<typeof FormSchema>>()
-  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false)
 
   const { data: members } = useOrganizationMembersQuery({ slug })
   const { data: allRoles, isSuccess } = useOrganizationRolesV2Query({ slug })
@@ -92,7 +91,7 @@ export const InviteMemberButton = () => {
     email: '',
     role: orgScopedRoles.find((role) => role.name === 'Developer')?.id.toString() ?? '',
     applyToOrg: true,
-    projectRef: '',
+    projectRefs: [] as string[],
     requireSso: 'auto' as const,
   }
 
@@ -140,15 +139,15 @@ export const InviteMemberButton = () => {
       email: emailSchema,
       role: z.string().min(1, 'Role is required'),
       applyToOrg: z.boolean(),
-      projectRef: z.string(),
+      projectRefs: z.array(z.string()),
       requireSso: z.enum(['auto', 'sso', 'non-sso']),
     })
     .superRefine((data, ctx) => {
-      if (!data.applyToOrg && !data.projectRef) {
+      if (!data.applyToOrg && data.projectRefs.length === 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: 'A project must be selected',
-          path: ['projectRef'],
+          message: 'Select at least one project',
+          path: ['projectRefs'],
         })
       }
     })
@@ -160,9 +159,9 @@ export const InviteMemberButton = () => {
     defaultValues,
   })
 
-  const [applyToOrg, projectRef, email] = useWatch({
+  const [applyToOrg, email] = useWatch({
     control: form.control,
-    name: ['applyToOrg', 'projectRef', 'email'],
+    name: ['applyToOrg', 'email'],
   })
 
   const emailCount = parseEmails(email ?? '').length
@@ -198,7 +197,7 @@ export const InviteMemberButton = () => {
       if (toInvite.length === 0) return
     }
 
-    const projectPayload = buildProjectPayload(values.applyToOrg, values.projectRef)
+    const projectPayload = buildProjectPayload(values.applyToOrg, values.projectRefs)
     const ssoPayload = buildSsoPayload(values.requireSso)
 
     let result: BatchInvitationResult
@@ -261,7 +260,6 @@ export const InviteMemberButton = () => {
   const hasUnsavedChanges = form.formState.isDirty
 
   const closeInviteSheet = () => {
-    setProjectDropdownOpen(false)
     setIsOpen(false)
     form.reset(defaultValues)
   }
@@ -288,7 +286,7 @@ export const InviteMemberButton = () => {
           <ButtonTooltip
             variant="primary"
             disabled={isInviteDisabled}
-            icon={<UserPlus size={14} />}
+            icon={<UserPlusIcon size={14} />}
             className="pointer-events-auto grow md:grow-0"
             onClick={() => setIsOpen(true)}
             tooltip={{
@@ -358,12 +356,20 @@ export const InviteMemberButton = () => {
                           const canAssignRole = rolesAddable.includes(role.id)
                           const isOwnerRole = role.name === 'Owner'
                           const disabledForStripe = isStripeProjectsOrg && isOwnerRole
-                          const disabled = !canAssignRole || disabledForStripe
+
+                          const isNoAccessRole = role.name === 'No-access'
+                          const isApplyingProjectRole = !applyToOrg
+                          const disabledForProjectRole = isApplyingProjectRole && isNoAccessRole
+
+                          const disabled =
+                            !canAssignRole || disabledForStripe || disabledForProjectRole
                           const disabledReason = disabledForStripe
                             ? 'Cannot be assigned in Stripe Projects organizations'
-                            : !canAssignRole
-                              ? 'Additional permissions required to assign role'
-                              : undefined
+                            : disabledForProjectRole
+                              ? 'Cannot assign No-access role to project-scoped members'
+                              : !canAssignRole
+                                ? 'Additional permissions required to assign role'
+                                : undefined
 
                           return (
                             <FormItem asChild key={role.id}>
@@ -438,25 +444,19 @@ export const InviteMemberButton = () => {
               )}
               {!applyToOrg && (
                 <FormField
-                  name="projectRef"
+                  name="projectRefs"
                   control={form.control}
                   render={({ field }) => (
                     <FormItemLayout
                       layout="horizontal"
-                      label="Select a project"
+                      label="Select projects"
                       description="Project access can be adjusted after the user joins"
                     >
                       <FormControl className="col-span-6">
-                        <OrganizationProjectSelector
-                          fetchOnMount
-                          sameWidthAsTrigger
-                          checkPosition="left"
-                          selectedRef={projectRef}
-                          open={projectDropdownOpen}
-                          setOpen={setProjectDropdownOpen}
-                          searchPlaceholder="Search project..."
-                          onSelect={(project) => field.onChange(project.ref)}
-                          onInitialLoad={(projects) => field.onChange(projects[0]?.ref ?? '')}
+                        <OrganizationProjectsMultiSelect
+                          selectedRefs={field.value}
+                          onChange={(refs) => field.onChange(refs)}
+                          triggerLabel="Select projects..."
                         />
                       </FormControl>
                     </FormItemLayout>

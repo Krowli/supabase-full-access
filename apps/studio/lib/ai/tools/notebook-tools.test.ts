@@ -6,9 +6,9 @@ import { sanitizeNotebookRunOutput, type NotebookRunOutput } from './notebook-ru
 import {
   decodeNotebookToolError,
   encodeNotebookToolError,
-  getNotebookTools,
   NotebookToolError,
-} from './notebook-tools'
+} from './notebook-tool-error'
+import { getNotebookTools } from './notebook-tools'
 import type { AgentNotebook } from '@/data/content/notebooks/notebook-schema'
 import { addAPIMock, type APIErrorBody } from '@/tests/lib/msw'
 
@@ -129,8 +129,9 @@ describe('ai/tools/notebook-tools', () => {
     it('should not require approval to read notebooks', () => {
       const tools = getNotebookTools()
 
-      expect(tools.list_notebooks.needsApproval).toBeUndefined()
-      expect(tools.get_notebook.needsApproval).toBeUndefined()
+      expect(tools.list_databases.needsApproval).toBe(false)
+      expect(tools.list_notebooks.needsApproval).toBe(false)
+      expect(tools.get_notebook.needsApproval).toBe(false)
     })
 
     it('should require approval to run, create, update, or delete a notebook', () => {
@@ -362,6 +363,7 @@ describe('ai/tools/notebook-tools', () => {
         id: 'notebook-1',
         name: 'Signup funnel',
         updated_at: '2026-01-01T00:00:00.000Z',
+        optInLevel: 'schema_and_log_and_data',
         cells: [
           {
             cell_id: 'primary-cell',
@@ -408,6 +410,7 @@ describe('ai/tools/notebook-tools', () => {
         id: 'notebook-1',
         name: 'Signup funnel',
         updated_at: '2026-01-01T00:00:00.000Z',
+        optInLevel: 'schema_and_log_and_data',
         cells: [
           {
             cell_id: 'database-cell',
