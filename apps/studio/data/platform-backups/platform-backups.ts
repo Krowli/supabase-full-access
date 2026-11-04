@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { fetchGet, fetchPost } from '@/data/fetchers'
 import { API_URL } from '@/lib/constants'
-import { ResponseError } from '@/types'
+import { StudioError } from '@/lib/errors/studio-errors'
 
 /**
  * Fork: the platform's backups of one project (deploy/platform/SPEC.md §19). The routes are the
@@ -48,7 +48,7 @@ export async function getPlatformBackups(projectRef: string, signal?: AbortSigna
   const response = await fetchGet<PlatformBackups>(`${API_URL}/platform/projects/${projectRef}/backups`, {
     abortSignal: signal,
   })
-  if (response instanceof ResponseError) throw response
+  if (response instanceof StudioError) throw response
   return response
 }
 
@@ -56,7 +56,7 @@ const isActive = (data?: PlatformBackups) =>
   data?.runs.some((r) => r.status === 'queued' || r.status === 'running') ?? false
 
 export const usePlatformBackupsQuery = (projectRef?: string) =>
-  useQuery<PlatformBackups, ResponseError>({
+  useQuery<PlatformBackups, StudioError>({
     queryKey: platformBackupsKey(projectRef),
     queryFn: ({ signal }) => getPlatformBackups(projectRef!, signal),
     enabled: typeof projectRef !== 'undefined',
@@ -66,10 +66,10 @@ export const usePlatformBackupsQuery = (projectRef?: string) =>
 
 export const usePlatformBackupRunMutation = (projectRef?: string) => {
   const queryClient = useQueryClient()
-  return useMutation<PlatformBackupRun, ResponseError, void>({
+  return useMutation<PlatformBackupRun, StudioError, void>({
     mutationFn: async () => {
       const response = await fetchPost<PlatformBackupRun>(`${API_URL}/platform/projects/${projectRef}/backups`, {})
-      if (response instanceof ResponseError) throw response
+      if (response instanceof StudioError) throw response
       return response
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: platformBackupsKey(projectRef) }),
@@ -78,13 +78,13 @@ export const usePlatformBackupRunMutation = (projectRef?: string) => {
 
 export const usePlatformBackupRestoreMutation = (projectRef?: string) => {
   const queryClient = useQueryClient()
-  return useMutation<PlatformBackupRun, ResponseError, { snapshotId: string; name: string }>({
+  return useMutation<PlatformBackupRun, StudioError, { snapshotId: string; name: string }>({
     mutationFn: async ({ snapshotId, name }) => {
       const response = await fetchPost<PlatformBackupRun>(
         `${API_URL}/platform/projects/${projectRef}/backups/restore`,
         { snapshot_id: snapshotId, name }
       )
-      if (response instanceof ResponseError) throw response
+      if (response instanceof StudioError) throw response
       return response
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: platformBackupsKey(projectRef) }),

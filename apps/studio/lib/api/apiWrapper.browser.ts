@@ -1,4 +1,5 @@
-import { ResponseError, ResponseFailure } from '@/types'
+import { StudioError } from '@/lib/errors/studio-errors'
+import type { ResponseFailure } from '@/types'
 
 // Fork: lives apart from apiWrapper.ts, which pulls in the server-only project resolver
 // (node:async_hooks), so client code such as lib/integration-utils.ts can import it.
@@ -7,7 +8,7 @@ export function isResponseOk<T>(response: T | ResponseFailure | undefined): resp
     return false
   }
 
-  if (response instanceof ResponseError) {
+  if (response instanceof StudioError) {
     return false
   }
 

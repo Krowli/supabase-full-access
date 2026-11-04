@@ -6,7 +6,8 @@ import { useInvalidateProjectsInfiniteQuery } from './org-projects-infinite-quer
 import type { Project } from './project-detail-query'
 import { fetchPost } from '@/data/fetchers'
 import { API_URL } from '@/lib/constants'
-import { ResponseError, type UseCustomMutationOptions } from '@/types'
+import { StudioError } from '@/lib/errors/studio-errors'
+import type { UseCustomMutationOptions } from '@/types'
 
 /**
  * Fork: re-runs provisioning of a project whose setup failed, through the control plane
@@ -21,7 +22,7 @@ export async function retryProject({ projectRef }: ProjectRetryVariables) {
     `${API_URL}/platform/projects/${projectRef}/retry`,
     {}
   )
-  if (response instanceof ResponseError) throw response
+  if (response instanceof StudioError) throw response
   return response
 }
 
@@ -30,13 +31,13 @@ export const useProjectRetryMutation = ({
   onError,
   ...options
 }: Omit<
-  UseCustomMutationOptions<ProjectRetryData, ResponseError, ProjectRetryVariables>,
+  UseCustomMutationOptions<ProjectRetryData, StudioError, ProjectRetryVariables>,
   'mutationFn'
 > = {}) => {
   const queryClient = useQueryClient()
   const { invalidateProjectsQuery } = useInvalidateProjectsInfiniteQuery()
 
-  return useMutation<ProjectRetryData, ResponseError, ProjectRetryVariables>({
+  return useMutation<ProjectRetryData, StudioError, ProjectRetryVariables>({
     mutationFn: (vars) => retryProject(vars),
     async onSuccess(data, variables, context) {
       // The status the route answers, at once: the detail query polls from there, and the building
