@@ -116,6 +116,8 @@ describe('/api/platform/projects/[ref]/config/postgrest', () => {
         db_extra_search_path: 'public, extensions',
         db_pool: null,
         db_pool_acquisition_timeout: null,
+        db_pool_max_idletime: null,
+        db_pool_max_lifetime: null,
         db_schema: 'public, graphql_public',
         max_rows: 500,
       })

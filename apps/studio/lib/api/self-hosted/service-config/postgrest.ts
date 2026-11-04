@@ -33,12 +33,12 @@ export type UpdatePostgrestConfigInput = Omit<UpdatePostgrestConfigBody, 'db_poo
  * database are excluded in SQL — they describe a connection this stack does not make.
  *
  * The three settings this module writes are in-database settings and reload without a restart:
- * `db-schemas`, `db-extra-search-path` and `db-max-rows`. **`db-pool` and
- * `db-pool-acquisition-timeout` are neither** — the PostgREST 14 reference gives both "In-Database:
- * n/a" and "Reloadable: N", so a `pgrst.db_pool` on the role would be a GUC nothing reads, and the
- * pool size can only be changed by the container's `PGRST_DB_POOL` plus a restart. Rather than
- * store a number that would read back as if it had taken effect, this module never writes either
- * one and answers `null` for both. The UI keeps the field read-only self-hosted and says where the
+ * `db-schemas`, `db-extra-search-path` and `db-max-rows`. **The pool settings — `db-pool`,
+ * `db-pool-acquisition-timeout`, `db-pool-max-idletime` and `db-pool-max-lifetime` — are neither**:
+ * the PostgREST 14 reference gives each "In-Database: n/a" and "Reloadable: N", so a `pgrst.db_pool`
+ * on the role would be a GUC nothing reads, and the pool can only be changed by the container's
+ * `PGRST_DB_POOL*` env plus a restart. Rather than store a number that would read back as if it had
+ * taken effect, this module never writes any of them and answers `null` for each. The UI keeps the field read-only self-hosted and says where the
  * real value lives.
  * See https://docs.postgrest.org/en/v14/references/configuration.html#db-pool.
  */
@@ -249,8 +249,13 @@ function databaseName(): string {
 const setSetting = (database: string, name: string, value: string) =>
   `ALTER ROLE authenticator IN DATABASE "${database}" SET pgrst.${name} = '${value}';`
 
-/** The two fields of the platform's body that the database cannot hold. See the note above. */
-const IGNORED_KEYS = ['db_pool', 'db_pool_acquisition_timeout'] as const
+/** The fields of the platform's body that the database cannot hold. See the note above. */
+const IGNORED_KEYS = [
+  'db_pool',
+  'db_pool_acquisition_timeout',
+  'db_pool_max_idletime',
+  'db_pool_max_lifetime',
+] as const
 
 /**
  * Writes the settings PostgREST reads from the database and tells it to pick them up.
@@ -258,11 +263,10 @@ const IGNORED_KEYS = ['db_pool', 'db_pool_acquisition_timeout'] as const
  * Only the fields the body carries are written — a PATCH names what changed, and resetting the rest
  * to their env values would undo settings the operator never touched.
  *
- * The two pool fields are dropped before anything else happens. Neither is an in-database setting,
- * so writing one would store a number PostgREST never reads and then hand it back on the next GET
- * as though the pool had changed. A body carrying them is not an error — the platform's contract
- * has both, and a client saving the whole form sends what it was given — it just does not move
- * them.
+ * The pool fields are dropped before anything else happens. None is an in-database setting, so
+ * writing one would store a number PostgREST never reads and then hand it back on the next GET as
+ * though the pool had changed. A body carrying them is not an error — the platform's contract has
+ * them, and a client saving the whole form sends what it was given — it just does not move them.
  */
 export async function updatePostgrestConfig(
   body: UpdatePostgrestConfigInput
@@ -308,6 +312,8 @@ export async function updatePostgrestConfig(
     db_extra_search_path: config.db_extra_search_path,
     db_pool: config.db_pool,
     db_pool_acquisition_timeout: null,
+    db_pool_max_idletime: null,
+    db_pool_max_lifetime: null,
     db_schema: config.db_schema,
     max_rows: config.max_rows,
   }

@@ -265,9 +265,11 @@ describe('api/self-hosted/service-config/postgrest', () => {
       ['a pool size', { db_pool: 25 }],
       ['a cleared pool size', { db_pool: null }],
       ['an acquisition timeout', { db_pool_acquisition_timeout: 10 }],
+      ['an idle time', { db_pool_max_idletime: 60 }],
+      ['a lifetime', { db_pool_max_lifetime: 3600 }],
       ['a pool size out of the range the form allows', { db_pool: 99999 }],
     ] as const)('never touches pgrst.db_pool, given %s', async (_name, body) => {
-      // Neither is an in-database setting, so a value written here would be a number PostgREST
+      // None is an in-database setting, so a value written here would be a number PostgREST
       // never reads and the next GET would hand it back as though the pool had changed.
       await updatePostgrestConfig(body)
 
@@ -276,10 +278,21 @@ describe('api/self-hosted/service-config/postgrest', () => {
       expect(writtenSql()).not.toContain('RESET')
     })
 
-    it('answers null for both pool fields, whatever the body asked for', async () => {
+    it('answers null for every pool field, whatever the body asked for', async () => {
       await expect(
-        updatePostgrestConfig({ max_rows: 500, db_pool: 25, db_pool_acquisition_timeout: 10 })
-      ).resolves.toMatchObject({ db_pool: null, db_pool_acquisition_timeout: null })
+        updatePostgrestConfig({
+          max_rows: 500,
+          db_pool: 25,
+          db_pool_acquisition_timeout: 10,
+          db_pool_max_idletime: 60,
+          db_pool_max_lifetime: 3600,
+        })
+      ).resolves.toMatchObject({
+        db_pool: null,
+        db_pool_acquisition_timeout: null,
+        db_pool_max_idletime: null,
+        db_pool_max_lifetime: null,
+      })
     })
 
     it('normalises the spacing of a schema list', async () => {
@@ -308,6 +321,8 @@ describe('api/self-hosted/service-config/postgrest', () => {
         max_rows: 500,
         db_pool: null,
         db_pool_acquisition_timeout: null,
+        db_pool_max_idletime: null,
+        db_pool_max_lifetime: null,
       })
     })
 
