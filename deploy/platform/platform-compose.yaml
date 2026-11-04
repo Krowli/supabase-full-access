@@ -125,7 +125,7 @@ services:
       start_period: 30s
 
   realtime:
-    image: 'supabase/realtime:v2.76.5'
+    image: 'supabase/realtime:v2.146.1'
     depends_on:
       platform-db:
         condition: service_healthy

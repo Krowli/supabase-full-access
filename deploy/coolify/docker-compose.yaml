@@ -331,7 +331,7 @@ services:
       - GOTRUE_MAILER_TEMPLATE_RELOADING_ENABLED=true
       - GOTRUE_MAILER_TEMPLATE_MAX_AGE=1m
   realtime-dev:
-    image: 'supabase/realtime:v2.76.5'
+    image: 'supabase/realtime:v2.146.1'
     container_name: realtime-dev.supabase-realtime
     depends_on:
       supabase-db:
