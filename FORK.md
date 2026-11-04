@@ -697,8 +697,9 @@ A notebook cell saved without an `_id` gets one, because the client requires it 
 **Not covered:**
 
 - **The Assistant does not see notebooks.** Its notebook tools stay platform-only
-  (`apps/studio/lib/ai/is-explorer-enabled.ts`); self-hosted it keeps its fallback tools, and needs
-  `OPENAI_API_KEY` for anything at all.
+  (`apps/studio/lib/ai/is-explorer-enabled.ts`); self-hosted it gets the tools the registry in
+  `apps/studio/lib/ai/tools/index.ts` marks for self-hosted, and needs `OPENAI_API_KEY` for anything
+  at all.
 - **Log cells** are written for the platform's log store and are expected to fail against
   self-hosted analytics. Database cells run through pg-meta like the SQL Editor.
 - **Two saves of one notebook at once:** the last write wins.
