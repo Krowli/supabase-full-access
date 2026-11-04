@@ -43,6 +43,7 @@ import { CreateCredentialModal } from './CreateCredentialModal'
 import { RevokeCredentialModal } from './RevokeCredentialModal'
 import { StorageCredItem } from './StorageCredItem'
 import { getConnectionURL } from './StorageSettings.utils'
+import { StorageSettingsNotice } from './StorageSettingsNotice'
 import { AlertError } from '@/components/ui/AlertError'
 import { DocsButton } from '@/components/ui/DocsButton'
 import { NoPermission } from '@/components/ui/NoPermission'
@@ -53,7 +54,6 @@ import { useStorageCredentialsQuery } from '@/data/storage/s3-access-key-query'
 import { FGA_PERMISSIONS, useAsyncCheckPermissionsV2 } from '@/hooks/misc/useCheckPermissionsV2'
 import { useIsProjectActive, useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { DOCS_URL } from '@/lib/constants'
-import { StorageSettingsNotice } from './StorageSettingsNotice'
 
 export const S3Connection = () => {
   const { ref: projectRef } = useParams()

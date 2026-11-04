@@ -42,12 +42,19 @@ export type PlatformBackups = {
   runs: PlatformBackupRun[]
 }
 
-export const platformBackupsKey = (projectRef?: string) => ['projects', projectRef, 'platform-backups']
+export const platformBackupsKey = (projectRef?: string) => [
+  'projects',
+  projectRef,
+  'platform-backups',
+]
 
 export async function getPlatformBackups(projectRef: string, signal?: AbortSignal) {
-  const response = await fetchGet<PlatformBackups>(`${API_URL}/platform/projects/${projectRef}/backups`, {
-    abortSignal: signal,
-  })
+  const response = await fetchGet<PlatformBackups>(
+    `${API_URL}/platform/projects/${projectRef}/backups`,
+    {
+      abortSignal: signal,
+    }
+  )
   if (response instanceof StudioError) throw response
   return response
 }
@@ -68,7 +75,10 @@ export const usePlatformBackupRunMutation = (projectRef?: string) => {
   const queryClient = useQueryClient()
   return useMutation<PlatformBackupRun, StudioError, void>({
     mutationFn: async () => {
-      const response = await fetchPost<PlatformBackupRun>(`${API_URL}/platform/projects/${projectRef}/backups`, {})
+      const response = await fetchPost<PlatformBackupRun>(
+        `${API_URL}/platform/projects/${projectRef}/backups`,
+        {}
+      )
       if (response instanceof StudioError) throw response
       return response
     },

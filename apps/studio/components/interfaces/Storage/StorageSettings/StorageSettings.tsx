@@ -38,6 +38,7 @@ import {
   encodeBucketLimitErrorMessage,
 } from './StorageSettings.utils'
 import { ValidateSizeLimit } from './StorageSettings.ValidateSizeLimit'
+import { StorageSettingsNotice } from './StorageSettingsNotice'
 import { AlertError } from '@/components/ui/AlertError'
 import { InlineLink } from '@/components/ui/InlineLink'
 import { NoPermission } from '@/components/ui/NoPermission'
@@ -51,7 +52,6 @@ import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganizati
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { DOCS_URL } from '@/lib/constants'
 import { formatBytes } from '@/lib/helpers'
-import { StorageSettingsNotice } from './StorageSettingsNotice'
 
 const formId = 'storage-settings-form'
 
