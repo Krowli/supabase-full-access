@@ -412,6 +412,10 @@ services:
       - ENABLE_IMAGE_TRANSFORMATION=true
       - 'IMGPROXY_URL={{IMGPROXY_URL}}'
       - IMGPROXY_REQUEST_TIMEOUT=15
+      # Object versioning and lifecycle rules (storage-api >= 1.80). Buckets keep versioning off until
+      # it is turned on for one; lifecycle rules are stored but storage-api does not apply them.
+      - STORAGE_VERSIONING_ENABLED=true
+      - STORAGE_LIFECYCLE_ENABLED=true
       - DATABASE_SEARCH_PATH=storage
       - NODE_ENV=production
       - REQUEST_ALLOW_X_FORWARDED_PATH=true
