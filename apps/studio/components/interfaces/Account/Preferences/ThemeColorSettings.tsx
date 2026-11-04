@@ -1,4 +1,4 @@
-import { useFlag } from 'common'
+import { IS_PLATFORM, useFlag } from 'common'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, CardContent, cn, Slider } from 'ui'
 
@@ -34,7 +34,8 @@ const SPECTRUM_SLIDER_CLASS = cn(
 )
 
 export const ThemeColorSettings = () => {
-  const isSpotColorEnabled = useFlag(APPEARANCE_SPOT_COLOR_FLAG)
+  // Fork: a client-only theme knob (localStorage). Self-hosted has no flag service, so it is on.
+  const isSpotColorEnabled = useFlag(APPEARANCE_SPOT_COLOR_FLAG) || !IS_PLATFORM
   const { mode, overrides, setOverride, resetOverrides } = useThemeOverrides()
   const visibleOverrides = resolveThemeOverridesForFlags(overrides, { isSpotColorEnabled })
   const [draft, setDraft] = useState<ThemeOverrides>({})

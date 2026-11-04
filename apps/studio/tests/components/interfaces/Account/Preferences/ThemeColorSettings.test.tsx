@@ -8,16 +8,21 @@ import { customRender } from '@/tests/lib/custom-render'
 
 type SliderProps = ComponentProps<typeof UI.Slider>
 
-const { resetOverrides, setOverride, mockUseFlag } = vi.hoisted(() => ({
+const { resetOverrides, setOverride, mockUseFlag, platform } = vi.hoisted(() => ({
   resetOverrides: vi.fn(),
   setOverride: vi.fn(),
   mockUseFlag: vi.fn(() => true),
+  // Fork: the flag decides only on the platform; self-hosted the spot color is always on.
+  platform: { value: true },
 }))
 
 vi.mock('common', async (importOriginal) => {
   const actual = await importOriginal<typeof import('common')>()
   return {
     ...actual,
+    get IS_PLATFORM() {
+      return platform.value
+    },
     useFlag: mockUseFlag,
   }
 })
@@ -56,6 +61,7 @@ describe('ThemeColorSettings', () => {
     setOverride.mockReset()
     mockUseFlag.mockReset()
     mockUseFlag.mockReturnValue(true)
+    platform.value = true
     document.documentElement.style.removeProperty('--chroma')
     document.documentElement.style.removeProperty('--primary-hue')
     document.documentElement.dataset.theme = 'dark'
@@ -104,6 +110,14 @@ describe('ThemeColorSettings', () => {
 
     expect(screen.queryByRole('slider', { name: 'Spot color' })).not.toBeInTheDocument()
     expect(screen.getByRole('slider', { name: 'Surface tint' })).toBeInTheDocument()
+  })
+
+  it('shows the spot color control self-hosted, where there is no flag', () => {
+    platform.value = false
+    mockUseFlag.mockReturnValue(false)
+    customRender(<ThemeColorSettings />)
+
+    expect(screen.getByRole('slider', { name: 'Spot color' })).toBeInTheDocument()
   })
 
   it('cancels a queued hue preview when the flag turns off', async () => {

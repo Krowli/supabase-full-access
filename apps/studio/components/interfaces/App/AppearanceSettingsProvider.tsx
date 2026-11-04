@@ -1,4 +1,4 @@
-import { useFlag, useIsomorphicLayoutEffect } from 'common'
+import { IS_PLATFORM, useFlag, useIsomorphicLayoutEffect } from 'common'
 import { useTheme } from 'next-themes'
 
 import { useThemeOverrides } from '@/hooks/misc/useThemeOverrides'
@@ -11,7 +11,8 @@ import {
 export const AppearanceSettingsProvider = () => {
   const { resolvedTheme } = useTheme()
   const { mode, overrides } = useThemeOverrides()
-  const isSpotColorEnabled = useFlag(APPEARANCE_SPOT_COLOR_FLAG)
+  // Fork: a client-only theme knob (localStorage). Self-hosted has no flag service, so it is on.
+  const isSpotColorEnabled = useFlag(APPEARANCE_SPOT_COLOR_FLAG) || !IS_PLATFORM
   const effectiveOverrides = resolveThemeOverridesForFlags(overrides, { isSpotColorEnabled })
 
   useIsomorphicLayoutEffect(() => {

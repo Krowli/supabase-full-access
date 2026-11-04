@@ -704,6 +704,18 @@ A notebook cell saved without an `_id` gets one, because the client requires it 
   self-hosted analytics. Database cells run through pg-meta like the SQL Editor.
 - **Two saves of one notebook at once:** the last write wins.
 
+## Theme spot color
+
+Account → Preferences → Appearance has a spot color (primary hue) slider that upstream shows only
+behind the `appearanceSpotColor` flag. It is a client-only theme setting kept in localStorage, and
+self-hosted there is no flag service, so the fork turns it on off the platform — the gate edits,
+each with a comment on the spot:
+
+| File                                                                           | Change                                       |
+| ------------------------------------------------------------------------------ | -------------------------------------------- |
+| `apps/studio/components/interfaces/Account/Preferences/ThemeColorSettings.tsx` | The slider shows when `!IS_PLATFORM`         |
+| `apps/studio/components/interfaces/App/AppearanceSettingsProvider.tsx`         | The saved hue is applied when `!IS_PLATFORM` |
+
 ## MCP: no feedback tools
 
 Upstream's self-hosted MCP server (`/api/mcp`) offers a `feedback` tool group whose
