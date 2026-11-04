@@ -133,5 +133,6 @@ describe('client import guard', () => {
 
     expect(roots.length).toBeGreaterThan(1000)
     expect(violations).toEqual([])
-  })
+    // It reads every client source file synchronously, about 4 s alone, more under the full suite.
+  }, 30_000)
 })
