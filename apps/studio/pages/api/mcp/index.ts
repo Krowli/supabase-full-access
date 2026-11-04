@@ -13,7 +13,6 @@ import {
   getDatabaseOperations,
   getDebuggingOperations,
   getDevelopmentOperations,
-  getFeedbackOperations,
 } from '@/lib/api/self-hosted/mcp'
 import { isMultiProject, MULTI_PROJECT_MCP_ERROR } from '@/lib/api/self-hosted/project-context'
 import { DEFAULT_PROJECT } from '@/lib/constants/api'
@@ -23,7 +22,7 @@ const supportedFeatureGroupSchema = z.enum([
   'database',
   'development',
   'debugging',
-  'feedback',
+  // Fork: no 'feedback' group. Its tools post what an agent writes to Supabase's cloud (FORK.md).
 ])
 
 const mcpQuerySchema = z.object({
@@ -71,7 +70,6 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     database: getDatabaseOperations({ headers }),
     development: getDevelopmentOperations({ headers }),
     debugging: getDebuggingOperations({ headers }),
-    feedback: getFeedbackOperations(),
   }
 
   try {

@@ -22,10 +22,7 @@ vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
   }),
 }))
 
-vi.mock('@supabase/mcp-server-supabase', () => ({
-  createSupabaseMcpServer,
-  createFeedbackOperations: vi.fn().mockReturnValue({}),
-}))
+vi.mock('@supabase/mcp-server-supabase', () => ({ createSupabaseMcpServer }))
 
 afterEach(() => {
   vi.unstubAllEnvs()

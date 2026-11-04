@@ -23,7 +23,6 @@ vi.mock('@supabase/mcp-server-supabase', () => ({
   createSupabaseMcpServer: vi.fn().mockReturnValue({
     connect: vi.fn().mockResolvedValue(undefined),
   }),
-  createFeedbackOperations: vi.fn().mockReturnValue({}),
 }))
 
 describe('/api/mcp', () => {
@@ -74,7 +73,8 @@ describe('/api/mcp', () => {
       expect(res._getStatusCode()).not.toBe(400)
     })
 
-    it('should accept the feedback feature group', async () => {
+    // Fork: the feedback tools post to Supabase's cloud, so the group is not offered.
+    it('should reject the feedback feature group', async () => {
       const { req, res } = createMocks({
         method: 'POST',
         query: { features: 'feedback' },
@@ -83,7 +83,7 @@ describe('/api/mcp', () => {
 
       await handler(req, res)
 
-      expect(res._getStatusCode()).not.toBe(400)
+      expect(res._getStatusCode()).toBe(400)
     })
 
     it('should reject the notebooks feature group', async () => {

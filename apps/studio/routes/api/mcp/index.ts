@@ -9,7 +9,6 @@ import {
   getDatabaseOperations,
   getDebuggingOperations,
   getDevelopmentOperations,
-  getFeedbackOperations,
 } from '@/lib/api/self-hosted/mcp'
 import { DEFAULT_PROJECT } from '@/lib/constants/api'
 
@@ -26,7 +25,7 @@ const supportedFeatureGroupSchema = z.enum([
   'database',
   'development',
   'debugging',
-  'feedback',
+  // Fork: no 'feedback' group. Its tools post what an agent writes to Supabase's cloud (FORK.md).
 ])
 
 const mcpQuerySchema = z.object({
@@ -68,7 +67,6 @@ const POST = async ({ request }: { request: Request }) => {
     database: getDatabaseOperations({ headers }),
     development: getDevelopmentOperations({ headers }),
     debugging: getDebuggingOperations({ headers }),
-    feedback: getFeedbackOperations(),
   }
 
   try {

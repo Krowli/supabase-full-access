@@ -704,6 +704,14 @@ A notebook cell saved without an `_id` gets one, because the client requires it 
   self-hosted analytics. Database cells run through pg-meta like the SQL Editor.
 - **Two saves of one notebook at once:** the last write wins.
 
+## MCP: no feedback tools
+
+Upstream's self-hosted MCP server (`/api/mcp`) offers a `feedback` tool group whose
+`submit_feedback` and `delete_feedback` post what an agent writes to Supabase's cloud. The fork
+leaves the group out: `pages/api/mcp/index.ts` and its TanStack mirror neither build the
+operations nor accept `features=feedback`, and `lib/api/self-hosted/mcp.ts` has no
+`getFeedbackOperations`.
+
 ## Updating from upstream
 
 This repository is standalone: it is no longer a GitHub fork of `supabase/supabase`, and nothing
