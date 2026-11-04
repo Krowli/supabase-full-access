@@ -412,7 +412,7 @@ services:
         source: ./entrypoint.sh
         target: /entrypoint.sh
   supabase-storage:
-    image: 'supabase/storage-api:v1.44.2'
+    image: 'supabase/storage-api:v1.84.14'
     command:
       - sh
       - '-c'
