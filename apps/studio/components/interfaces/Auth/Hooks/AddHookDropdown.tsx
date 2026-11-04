@@ -1,6 +1,5 @@
-import { PermissionAction } from '@supabase/shared-types/out/constants'
 import { useParams } from 'common'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from 'lucide-react'
 import { useMemo } from 'react'
 import {
   Button,
@@ -18,7 +17,7 @@ import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
 import { InlineLink } from '@/components/ui/InlineLink'
 import { useAuthConfigQuery } from '@/data/auth/auth-config-query'
 import { useCheckEntitlements } from '@/hooks/misc/useCheckEntitlements'
-import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
+import { FGA_PERMISSIONS, useAsyncCheckPermissionsV2 } from '@/hooks/misc/useCheckPermissionsV2'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
 import { IS_PLATFORM } from '@/lib/constants'
 
@@ -43,7 +42,9 @@ export const AddHookDropdown = ({
   const { data: organization } = useSelectedOrganizationQuery()
 
   const { data: authConfig } = useAuthConfigQuery({ projectRef })
-  const { can: canUpdateAuthHook } = useAsyncCheckPermissions(PermissionAction.AUTH_EXECUTE, '*')
+  const { can: canUpdateAuthHook } = useAsyncCheckPermissionsV2(
+    FGA_PERMISSIONS.PROJECT.AUTH_HOOKS_WRITE
+  )
   const { getEntitlementSetValues: getEntitledHookSet } = useCheckEntitlements('auth.hooks')
   // An entitlement is a hosted-plan allowance; self-hosted there is no plan, so every hook is one
   // this GoTrue can run.
@@ -89,7 +90,7 @@ export const AddHookDropdown = ({
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
-        <Button variant={variant} iconRight={<ChevronDown />}>
+        <Button variant={variant} iconRight={<ChevronDownIcon />}>
           {buttonText}
         </Button>
       </DropdownMenuTrigger>

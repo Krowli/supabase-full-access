@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 
 import { databaseKeys } from './keys'
 import { get, handleError } from '@/data/fetchers'
-import type { ResponseError, UseCustomQueryOptions } from '@/types'
+import type { StudioError } from '@/lib/errors/studio-errors'
+import type { UseCustomQueryOptions } from '@/types'
 
 export type PgbouncerConfigVariables = {
   projectRef?: string
@@ -23,7 +24,7 @@ export async function getPgbouncerConfig(
 }
 
 export type PgbouncerConfigData = Awaited<ReturnType<typeof getPgbouncerConfig>>
-export type PgbouncerConfigError = ResponseError
+export type PgbouncerConfigError = StudioError
 
 export const usePgbouncerConfigQuery = <TData = PgbouncerConfigData>(
   { projectRef }: PgbouncerConfigVariables,

@@ -4,11 +4,12 @@ import { getAccessToken, IS_PLATFORM } from 'common'
 import createClient from 'openapi-fetch'
 
 import type { paths } from './api'
+import { reportEmptyBodyResponse } from './empty-body-diagnostics'
 import { ERROR_PATTERNS } from './error-patterns'
+import { guardMethod, type GuardedClientMethod } from './guarded-fetch'
 import { API_URL } from '@/lib/constants'
+import { StudioError, UnknownAPIResponseError } from '@/lib/errors/studio-errors'
 import { uuidv4 } from '@/lib/helpers'
-import { ResponseError } from '@/types'
-import { UnknownAPIResponseError } from '@/types/api-errors'
 import { ErrorMetadata } from '@/types/base'
 
 // generated from openapi-typescript
@@ -73,8 +74,18 @@ export async function constructHeaders(headersInit?: HeadersInit | undefined) {
  * Normalize empty-body success responses by setting `Content-Length: 0` so the parser
  * short-circuits regardless of transport. Non-empty responses are returned untouched.
  */
-export async function normalizeEmptyBodyResponse(response: Response): Promise<Response> {
-  if (response.status === 204 || response.headers.has('Content-Length')) {
+export async function normalizeEmptyBodyResponse(
+  response: Response,
+  source?: { request: Request; schemaPath: string }
+): Promise<Response> {
+  if (response.status === 204) {
+    return response
+  }
+
+  if (response.headers.has('Content-Length')) {
+    if (source && response.headers.get('Content-Length') === '0') {
+      void reportEmptyBodyResponse({ ...source, response })
+    }
     return response
   }
 
@@ -82,6 +93,8 @@ export async function normalizeEmptyBodyResponse(response: Response): Promise<Re
   if (body.length > 0) {
     return response
   }
+
+  if (source) void reportEmptyBodyResponse({ ...source, response })
 
   const headers = new Headers(response.headers)
   headers.set('Content-Length', '0')
@@ -99,7 +112,7 @@ function pgMetaGuard(request: Request) {
     // in such case, we save the hops and throw a 421 response instead
     if (!isValidConnString(request.headers.get('x-connection-encrypted'))) {
       const retryAfterHeader = request.headers.get('Retry-After')
-      throw new ResponseError(
+      throw new StudioError(
         'API Error: happened while trying to acquire connection to the database',
         400,
         request.headers.get('X-Request-Id') ?? undefined,
@@ -125,9 +138,9 @@ client.use(
   },
   {
     // Middleware to format errors
-    async onResponse({ request, response }) {
+    async onResponse({ request, response, schemaPath }) {
       if (response.ok) {
-        return normalizeEmptyBodyResponse(response)
+        return normalizeEmptyBodyResponse(response, { request, schemaPath })
       }
 
       // handle errors
@@ -161,16 +174,14 @@ client.use(
   }
 )
 
-export const {
-  GET: get,
-  POST: post,
-  PUT: put,
-  PATCH: patch,
-  DELETE: del,
-  HEAD: head,
-  TRACE: trace,
-  OPTIONS: options,
-} = client
+export const get = guardMethod('get', client.GET) as GuardedClientMethod<paths, 'get'>
+export const post = guardMethod('post', client.POST) as GuardedClientMethod<paths, 'post'>
+export const put = guardMethod('put', client.PUT) as GuardedClientMethod<paths, 'put'>
+export const patch = guardMethod('patch', client.PATCH) as GuardedClientMethod<paths, 'patch'>
+export const del = guardMethod('delete', client.DELETE) as GuardedClientMethod<paths, 'delete'>
+export const { HEAD: head, TRACE: trace, OPTIONS: options } = client
+
+export { unguarded, type Unguarded } from './guarded-fetch'
 
 type HandleErrorOptions = {
   alwaysCapture?: boolean
@@ -247,7 +258,7 @@ export const handleError = (error: unknown, options: HandleErrorOptions = {}): n
 // [Joshen] The methods below are brought over from lib/common/fetch because we still need them
 // primarily for our own endpoints in the dashboard repo. So consolidating all the fetch methods into here.
 
-async function handleFetchResponse<T>(response: Response): Promise<T | ResponseError> {
+async function handleFetchResponse<T>(response: Response): Promise<T | StudioError> {
   const contentType = response.headers.get('Content-Type')
   if (contentType === 'application/octet-stream') return response as any
   try {
@@ -260,14 +271,14 @@ async function handleFetchResponse<T>(response: Response): Promise<T | ResponseE
       return resTxt as any
     }
   } catch (e) {
-    return handleError(response) as T | ResponseError
+    return handleError(response) as T | StudioError
   }
 }
 
 async function handleFetchHeadResponse<T>(
   response: Response,
   headers: string[]
-): Promise<T | ResponseError> {
+): Promise<T | StudioError> {
   try {
     const res = {} as any
     headers.forEach((header: string) => {
@@ -275,11 +286,11 @@ async function handleFetchHeadResponse<T>(
     })
     return res
   } catch (e) {
-    return handleError(response) as T | ResponseError
+    return handleError(response) as T | StudioError
   }
 }
 
-async function handleFetchError(response: unknown): Promise<ResponseError> {
+async function handleFetchError(response: unknown): Promise<StudioError> {
   let resJson: any = {}
 
   if (response instanceof Error) {
@@ -303,11 +314,11 @@ async function handleFetchError(response: unknown): Promise<ResponseError> {
       : null
   const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader) : undefined
 
-  let error = new ResponseError(message, status, undefined, retryAfter)
+  let error = new StudioError(message, status, undefined, retryAfter)
 
   // @ts-expect-error - [Alaister] many of our local api routes check `if (response.error)`.
   // This is a fix to keep those checks working without breaking changes.
-  // In future we should check for `if (response instanceof ResponseError)` instead.
+  // In future we should check for `if (response instanceof StudioError)` instead.
   error.error = error
 
   return error
@@ -319,7 +330,7 @@ async function handleFetchError(response: unknown): Promise<ResponseError> {
 export async function fetchGet<T = any>(
   url: string,
   options?: { [prop: string]: any }
-): Promise<T | ResponseError> {
+): Promise<T | StudioError> {
   try {
     const { headers: otherHeaders, abortSignal, ...otherOptions } = options ?? {}
     const headers = await constructHeaders({
@@ -350,7 +361,7 @@ export async function fetchPost<T = any>(
   url: string,
   data: { [prop: string]: any },
   options?: { [prop: string]: any }
-): Promise<T | ResponseError> {
+): Promise<T | StudioError> {
   try {
     const { headers: otherHeaders, abortSignal, ...otherOptions } = options ?? {}
     const headers = await constructHeaders({
@@ -380,7 +391,7 @@ export async function fetchHeadWithTimeout<T = any>(
   url: string,
   headersToRetrieve: string[],
   options?: { [prop: string]: any }
-): Promise<T | ResponseError> {
+): Promise<T | StudioError> {
   try {
     const timeout = options?.timeout ?? 60000
 

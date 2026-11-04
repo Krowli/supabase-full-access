@@ -51,6 +51,11 @@ export const StorageMenuV2 = () => {
     { enabled: showVectors }
   )
   useShortcut(SHORTCUT_IDS.NAV_STORAGE_S3, () => router.push(`/project/${ref}/storage/s3`))
+  useShortcut(
+    SHORTCUT_IDS.NAV_STORAGE_SIGNING_KEYS,
+    () => router.push(`/project/${ref}/storage/signing-keys`),
+    { enabled: isPlatform }
+  )
 
   const bucketTypes = Object.entries(BUCKET_TYPES).filter(([key]) => {
     if (key === 'analytics') return showAnalytics
@@ -112,6 +117,20 @@ export const StorageMenuV2 = () => {
               </Menu.Item>
             </Link>
           </ShortcutTooltip>
+
+          {isPlatform && (
+            <ShortcutTooltip
+              shortcutId={SHORTCUT_IDS.NAV_STORAGE_SIGNING_KEYS}
+              side="right"
+              delayDuration={1000}
+            >
+              <Link href={`/project/${ref}/storage/signing-keys`}>
+                <Menu.Item rounded active={page === 'signing-keys'}>
+                  <p className="truncate">URL signing keys</p>
+                </Menu.Item>
+              </Link>
+            </ShortcutTooltip>
+          )}
         </div>
       </div>
     </Menu>

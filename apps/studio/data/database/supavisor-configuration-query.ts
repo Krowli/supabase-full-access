@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 
 import { databaseKeys } from './keys'
 import { get, handleError } from '@/data/fetchers'
-import type { ResponseError, UseCustomQueryOptions } from '@/types'
+import type { StudioError } from '@/lib/errors/studio-errors'
+import type { UseCustomQueryOptions } from '@/types'
 
 type SupavisorConfigurationVariables = {
   projectRef?: string
@@ -23,7 +24,7 @@ export async function getSupavisorConfiguration(
 }
 
 export type SupavisorConfigurationData = Awaited<ReturnType<typeof getSupavisorConfiguration>>
-export type SupavisorConfigurationError = ResponseError
+export type SupavisorConfigurationError = StudioError
 
 export const useSupavisorConfigurationQuery = <TData = SupavisorConfigurationData>(
   { projectRef }: SupavisorConfigurationVariables,

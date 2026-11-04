@@ -3,7 +3,8 @@ import { components } from 'api-types'
 
 import { storageCredentialsKeys } from './s3-access-key-keys'
 import { get, handleError } from '@/data/fetchers'
-import type { ResponseError, UseCustomQueryOptions } from '@/types'
+import type { StudioError } from '@/lib/errors/studio-errors'
+import type { UseCustomQueryOptions } from '@/types'
 
 type StorageCredentialsVariables = { projectRef?: string }
 
@@ -34,9 +35,9 @@ export const useStorageCredentialsQuery = <TData = StorageCredentialsData>(
   {
     enabled = true,
     ...options
-  }: UseCustomQueryOptions<StorageCredentialsData, ResponseError, TData> = {}
+  }: UseCustomQueryOptions<StorageCredentialsData, StudioError, TData> = {}
 ) =>
-  useQuery<StorageCredentialsData, ResponseError, TData>({
+  useQuery<StorageCredentialsData, StudioError, TData>({
     queryKey: storageCredentialsKeys.credentials(projectRef),
     queryFn: ({ signal }) => fetchStorageCredentials({ projectRef }, signal),
     // Self-hosted answers this from `lib/api/self-hosted/service-config/storage.ts`.
