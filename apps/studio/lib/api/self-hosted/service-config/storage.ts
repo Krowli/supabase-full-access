@@ -189,6 +189,13 @@ const envImageTransformation = (): boolean => projectEnv('ENABLE_IMAGE_TRANSFORM
 const envS3ProtocolEnabled = (): boolean => projectEnv('S3_PROTOCOL_ENABLED') !== 'false'
 
 /**
+ * Off unless the environment says `true`, as storage-api reads `STORAGE_VERSIONING_ENABLED` (from
+ * v1.80; older ones have no versioning). The stack sets it next to its storage-api image, and Studio
+ * mirrors it, so the versioning pages show only where storage-api can serve them (FORK.md).
+ */
+const envObjectVersioning = (): boolean => projectEnv('STORAGE_VERSIONING_ENABLED') === 'true'
+
+/**
  * The key pair the compose file gave storage-api, presented as the one credential the page lists.
  *
  * It has no creation time — the container environment carries none — so it is reported as created
@@ -255,13 +262,17 @@ async function renderStorageEnv(settings: ResolvedSettings): Promise<void> {
 /**
  * The shape the settings page and the S3 page both read.
  *
- * Everything outside `fileSizeLimit`, `imageTransformation` and `s3Protocol` is reported off and
- * zeroed: self-hosted storage has no Iceberg catalog, no vector buckets, no CDN to purge and no
- * object versioning, and the two pages read these fields to decide what to render.
+ * Everything outside `fileSizeLimit`, `imageTransformation`, `s3Protocol` and object versioning is
+ * reported off and zeroed: self-hosted storage has no Iceberg catalog, no vector buckets and no CDN
+ * to purge, and the two pages read these fields to decide what to render.
  */
 function toConfigResponse(settings: ResolvedSettings): StorageConfig {
   return {
-    capabilities: { iceberg_catalog: false, list_v2: false, object_versioning: false },
+    capabilities: {
+      iceberg_catalog: false,
+      list_v2: false,
+      object_versioning: envObjectVersioning(),
+    },
     external: { upstreamTarget: 'main' },
     features: {
       icebergCatalog: { enabled: false, maxCatalogs: 0, maxNamespaces: 0, maxTables: 0 },

@@ -86,6 +86,14 @@ describe('api/self-hosted/service-config/storage', () => {
       expect(config.features.s3Protocol.enabled).toBe(false)
     })
 
+    it('reports object versioning where the stack turns it on in storage-api', async () => {
+      vi.stubEnv('STORAGE_VERSIONING_ENABLED', 'true')
+
+      const config = await getStorageConfig()
+
+      expect(config.capabilities.object_versioning).toBe(true)
+    })
+
     it('answers with storage-api defaults when the environment says nothing', async () => {
       const config = await getStorageConfig()
 

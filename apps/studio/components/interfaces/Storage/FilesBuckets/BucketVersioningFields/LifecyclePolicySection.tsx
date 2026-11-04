@@ -19,10 +19,12 @@ import { ShimmeringLoader } from 'ui-patterns/ShimmeringLoader'
 
 import type { BucketFormValues } from '../FilesBucket.schema'
 import { ExpirationModeToggle } from './ExpirationModeToggle'
+import { LifecycleSelfHostedNotice } from '@/components/interfaces/Storage/LifecycleSelfHostedNotice'
 import type { ExpirationMode } from '@/components/interfaces/Storage/StorageVersioning.constants'
 import { AlertError } from '@/components/ui/AlertError'
 import { FormSectionCollapse } from '@/components/ui/FormSectionCollapse'
 import { InlineLink } from '@/components/ui/InlineLink'
+import { IS_PLATFORM } from '@/lib/constants'
 
 const toFieldValue = (rawInput: string): '' | number => {
   const digits = rawInput.replace(/[^0-9]/g, '')
@@ -147,6 +149,7 @@ export const LifecyclePolicySection = ({
   return (
     <div className="flex flex-col gap-y-2">
       <SectionHeading rulesHref={rulesHref} />
+      <LifecycleSelfHostedNotice />
 
       <FormField
         name="version_expiry_days"
@@ -236,7 +239,12 @@ export const LifecyclePolicySection = ({
               type="warning"
               className="mt-2"
               title="No lifecycle policy"
-              description="Noncurrent versions accumulate and increase storage costs. Set an expiration to delete them automatically."
+              description={
+                IS_PLATFORM
+                  ? 'Noncurrent versions accumulate and increase storage costs. Set an expiration to delete them automatically.'
+                  : // Fork: self-hosted an expiration deletes nothing (LifecycleSelfHostedNotice).
+                    "Noncurrent versions accumulate and increase storage costs. Delete them from a file's version history."
+              }
             />
           </FormSectionCollapse>
         )}

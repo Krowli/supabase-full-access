@@ -38,12 +38,15 @@ const handlePatch = async (req: NextApiRequest, res: NextApiResponse) => {
     public: isPublicBucket,
     allowed_mime_types: allowedMimeTypes,
     file_size_limit: fileSizeLimit,
+    versioning_status: versioningStatus,
   } = req.body
 
   const { data, error } = await supabase.storage.updateBucket(id as string, {
     public: isPublicBucket,
     allowedMimeTypes,
     fileSizeLimit,
+    // Fork: object versioning (FORK.md). The client sends a status only when it changes.
+    ...(versioningStatus ? { versioningStatus } : {}),
   })
   if (error) {
     return res.status(400).json({ error: { message: error.message } })

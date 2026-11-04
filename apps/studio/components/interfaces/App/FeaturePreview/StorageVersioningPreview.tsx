@@ -3,6 +3,7 @@ import Image from 'next/image'
 import { BASE_PATH } from 'ui-patterns/CommandMenu/prepackaged/shared/constants'
 
 import { InlineLink } from '@/components/ui/InlineLink'
+import { IS_PLATFORM } from '@/lib/constants'
 
 export const StorageVersioningPreview = () => {
   const { ref = '_' } = useParams()
@@ -49,6 +50,14 @@ export const StorageVersioningPreview = () => {
         Object versioning is in <em>Private Alpha</em>. It stays off for every bucket until you turn
         it on, and turning it off later suspends it without removing the versions you already have.
       </p>
+
+      {/* Fork: self-hosted storage-api stores lifecycle rules but does not apply them (FORK.md). */}
+      {!IS_PLATFORM && (
+        <p className="text-sm text-foreground-light">
+          Self-hosted, lifecycle rules are saved but not applied: Storage keeps every noncurrent
+          version until you delete it from a file's version history.
+        </p>
+      )}
     </div>
   )
 }

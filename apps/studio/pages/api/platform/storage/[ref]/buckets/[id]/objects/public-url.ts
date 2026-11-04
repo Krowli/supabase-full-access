@@ -20,9 +20,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
   const { id } = req.query
-  const { path } = req.body
+  const { path, options } = req.body
 
-  const { data } = supabase.storage.from(id as string).getPublicUrl(path)
+  // Fork: `options.versionId` points at that version of the file (FORK.md, object versioning). The
+  // other options are left out, as before.
+  const versionId: string | undefined = options?.versionId
+  const { data } = supabase.storage
+    .from(id as string)
+    .getPublicUrl(path, versionId ? { versionId } : undefined)
 
   // change the domain name to the SUPABASE_PUBLIC_URL since SUPABASE_URL is not accessible from the client
   const publicUrl = new URL(data.publicUrl)

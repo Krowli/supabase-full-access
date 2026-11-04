@@ -4,7 +4,6 @@ import { components } from 'api-types'
 import { storageKeys } from '../keys'
 import type { ObjectVersionAction } from './object-versions-query'
 import { handleError, post } from '@/data/fetchers'
-import { IS_PLATFORM } from '@/lib/constants'
 import type { StudioError } from '@/lib/errors/studio-errors'
 
 type StorageObjectV2 = components['schemas']['StorageListResponseV2_Output']['objects'][number]
@@ -147,5 +146,6 @@ export const archivedObjectsQueryOptions = ({ projectRef, bucketId }: ArchivedOb
   queryOptions({
     queryKey: storageKeys.archivedObjects(projectRef, bucketId),
     queryFn: ({ signal }) => getArchivedObjects({ projectRef, bucketId }, signal),
-    enabled: IS_PLATFORM && typeof projectRef !== 'undefined' && typeof bucketId !== 'undefined',
+    // Fork: self-hosted serves this from pages/api/platform/storage (FORK.md, object versioning).
+    enabled: typeof projectRef !== 'undefined' && typeof bucketId !== 'undefined',
   })

@@ -43,12 +43,16 @@ const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
     public: isPublicBucket,
     allowed_mime_types: allowedMimeTypes,
     file_size_limit: fileSizeLimit,
+    versioning_status: versioningStatus,
   } = req.body
 
   const { data, error } = await supabase.storage.createBucket(id, {
     public: isPublicBucket,
     allowedMimeTypes,
     fileSizeLimit,
+    // Fork: object versioning (FORK.md). The client always sends a status; only ENABLED is passed
+    // on, so a create keeps working against a storage-api older than versioning.
+    ...(versioningStatus === 'ENABLED' ? { versioningStatus } : {}),
   })
   if (error) {
     return res.status(400).json({ error: { message: error.message } })

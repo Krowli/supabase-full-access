@@ -73,6 +73,16 @@ describe('BucketLifecycleRules', () => {
     expect(screen.queryByText('Lifecycle rules')).not.toBeInTheDocument()
   })
 
+  // Fork: self-hosted storage-api stores rules but does not apply them (LifecycleSelfHostedNotice).
+  test('says self-hosted that rules are saved but not applied', async () => {
+    mockLifecycle({ rules: [ageRule] })
+
+    renderRules()
+
+    expect(await screen.findByText('expire-after-month')).toBeInTheDocument()
+    expect(screen.getByText('Lifecycle rules are saved but not applied')).toBeInTheDocument()
+  })
+
   test('lists stored rules field for field', async () => {
     mockLifecycle({
       rules: [

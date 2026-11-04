@@ -172,7 +172,8 @@ export const useIsExplorerEnabled = () => {
 export const useIsStorageVersioningEnabled = () => {
   const { ref } = useParams()
   const { flags } = useFeaturePreviewContext()
-  const isStorageVersioningEnabled = useFlag('storageVersioningPrivateAlpha')
+  // Self-hosted the flag can never be on; the capability and the opt-in decide (useFeaturePreviews.ts).
+  const isStorageVersioningEnabled = useFlag('storageVersioningPrivateAlpha') || !IS_PLATFORM
   const { data } = useProjectStorageConfigQuery({ projectRef: ref })
   const isObjectVersioningAvailable = !!data?.capabilities?.object_versioning
 

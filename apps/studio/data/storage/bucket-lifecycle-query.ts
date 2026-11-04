@@ -3,7 +3,6 @@ import { components } from 'api-types'
 
 import { storageKeys } from './keys'
 import { get, handleError } from '@/data/fetchers'
-import { IS_PLATFORM } from '@/lib/constants'
 import type { StudioError } from '@/lib/errors/studio-errors'
 
 export type BucketLifecycle = components['schemas']['BucketLifecycleResponse_Output']
@@ -43,5 +42,6 @@ export const bucketLifecycleQueryOptions = ({ projectRef, bucketId }: BucketLife
   queryOptions({
     queryKey: storageKeys.bucketLifecycle(projectRef, bucketId),
     queryFn: ({ signal }) => getBucketLifecycle({ projectRef, bucketId }, signal),
-    enabled: IS_PLATFORM && typeof projectRef !== 'undefined' && typeof bucketId !== 'undefined',
+    // Fork: self-hosted serves this from pages/api/platform/storage (FORK.md, object versioning).
+    enabled: typeof projectRef !== 'undefined' && typeof bucketId !== 'undefined',
   })

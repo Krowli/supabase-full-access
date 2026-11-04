@@ -17,6 +17,7 @@ import {
 import { LifecycleRuleRow } from './LifecycleRuleRow'
 import { LifecycleRuleSheet } from './LifecycleRuleSheet'
 import { useIsStorageVersioningEnabled } from '@/components/interfaces/App/FeaturePreview/FeaturePreviewContext'
+import { LifecycleSelfHostedNotice } from '@/components/interfaces/Storage/LifecycleSelfHostedNotice'
 import { getBucketVersioningState } from '@/components/interfaces/Storage/StorageVersioning.constants'
 import { AlertError } from '@/components/ui/AlertError'
 import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
@@ -135,6 +136,8 @@ export const BucketLifecycleRules = ({ projectRef, bucket }: BucketLifecycleRule
             Add rule
           </ButtonTooltip>
         </div>
+
+        <LifecycleSelfHostedNotice />
 
         {isPending && <ShimmeringLoader className="h-9 py-0" />}
 

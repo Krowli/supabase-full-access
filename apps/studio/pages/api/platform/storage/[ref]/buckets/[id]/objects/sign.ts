@@ -20,9 +20,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
   const { id } = req.query
-  const { path, expiresIn = 60 * 60 * 24 } = req.body
+  const { path, expiresIn = 60 * 60 * 24, options } = req.body
 
-  const { data, error } = await supabase.storage.from(id as string).createSignedUrl(path, expiresIn)
+  // Fork: `options.versionId` signs that version of the file (FORK.md, object versioning). The other
+  // options are left out, as before.
+  const versionId: string | undefined = options?.versionId
+  const { data, error } = await supabase.storage
+    .from(id as string)
+    .createSignedUrl(path, expiresIn, versionId ? { versionId } : undefined)
   if (error) {
     return res.status(400).json({ error: { message: error.message } })
   }

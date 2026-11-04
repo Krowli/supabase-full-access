@@ -3,7 +3,6 @@ import { components } from 'api-types'
 
 import { storageKeys } from '../keys'
 import { handleError, post } from '@/data/fetchers'
-import { IS_PLATFORM } from '@/lib/constants'
 import type { StudioError } from '@/lib/errors/studio-errors'
 
 type StorageObject = components['schemas']['StorageObject_Output']
@@ -112,8 +111,8 @@ export const objectVersionsQueryOptions = ({
   queryOptions({
     queryKey: storageKeys.objectVersions(projectRef, bucketId, path, lifecyclePolicy),
     queryFn: ({ signal }) => getObjectVersions({ projectRef, bucketId, path }, signal),
+    // Fork: self-hosted serves this from pages/api/platform/storage (FORK.md, object versioning).
     enabled:
-      IS_PLATFORM &&
       typeof projectRef !== 'undefined' &&
       typeof bucketId !== 'undefined' &&
       typeof path !== 'undefined',

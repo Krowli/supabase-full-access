@@ -19,9 +19,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 const handlePost = async (req: NextApiRequest, res: NextApiResponse) => {
   const { id } = req.query
-  const { from, to } = req.body
+  const { from, to, sourceVersionId } = req.body
 
-  const { data, error } = await supabase.storage.from(id as string).move(from, to)
+  // Fork: `sourceVersionId` restores an older version of a file (FORK.md, object versioning).
+  const { data, error } = await supabase.storage
+    .from(id as string)
+    .move(from, to, sourceVersionId ? { sourceVersionId } : undefined)
   if (error) {
     return res.status(400).json({ error: { message: error.message } })
   }

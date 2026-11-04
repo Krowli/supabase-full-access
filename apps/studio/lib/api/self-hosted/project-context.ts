@@ -95,6 +95,7 @@ export const PROJECT_ENV_NAMES = [
   'S3_PROTOCOL_ENABLED',
   'S3_PROTOCOL_ACCESS_KEY_ID',
   'S3_PROTOCOL_ACCESS_KEY_SECRET',
+  'STORAGE_VERSIONING_ENABLED',
 ] as const
 
 /** `GOTRUE_*` covers the auth-config directory and the GoTrue settings Studio mirrors. */

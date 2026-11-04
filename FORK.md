@@ -704,6 +704,48 @@ A notebook cell saved without an `_id` gets one, because the client requires it 
   self-hosted analytics. Database cells run through pg-meta like the SQL Editor.
 - **Two saves of one notebook at once:** the last write wins.
 
+## Storage object versioning
+
+Upstream ships object versioning (archived files, version history, restore, lifecycle rules) as a
+platform-only preview behind the `storageVersioningPrivateAlpha` flag. storage-api serves all of it
+single-tenant from v1.80 with `STORAGE_VERSIONING_ENABLED` and `STORAGE_LIFECYCLE_ENABLED`, which
+both composes set next to `supabase/storage-api:v1.84.14`. The fork offers the preview self-hosted,
+**off until someone turns it on**: account menu → Feature previews → Storage object versioning.
+Versioning then still has to be turned on per bucket (bucket settings); existing buckets keep it off.
+
+**Lifecycle rules are stored, not applied.** storage-api saves them, and nothing in it ever expires
+a noncurrent version. Self-hosted, the bucket settings, the lifecycle rules list and the preview say
+so (`components/interfaces/Storage/LifecycleSelfHostedNotice.tsx`); old versions are deleted from a
+file's version history.
+
+Studio reports `capabilities.object_versioning` from `STORAGE_VERSIONING_ENABLED` in the project's
+environment (`lib/api/self-hosted/service-config/storage.ts`): the single-stack compose mirrors it
+into Studio, and the platform's `STACK_SETTINGS` (`lib/api/self-hosted/control-plane-registry.ts`)
+carries it, kept equal to `project-compose.yaml` by its test. So a platform Studio with this change
+offers versioning for every project; run `POST /projects/<ref>/stack` on each project first.
+
+**The gate edits** — each with a comment on the spot:
+
+| File                                                                                                       | Change                                                                       |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `apps/studio/components/interfaces/App/FeaturePreview/useFeaturePreviews.ts`                               | The preview is enabled, not platform-only and not opt-in by default off it   |
+| `apps/studio/components/interfaces/App/FeaturePreview/FeaturePreviewContext.tsx`                           | `useIsStorageVersioningEnabled` lets the capability and the toggle decide    |
+| `apps/studio/data/storage/bucket-lifecycle-query.ts`                                                       | Runs self-hosted                                                             |
+| `apps/studio/data/storage/versioning/archived-objects-query.ts`                                            | Runs self-hosted                                                             |
+| `apps/studio/data/storage/versioning/archived-object-names-query.ts`                                       | Runs self-hosted                                                             |
+| `apps/studio/data/storage/versioning/object-versions-query.ts`                                             | Runs self-hosted                                                             |
+| `apps/studio/components/interfaces/Storage/FilesBuckets/BucketVersioningFields/LifecyclePolicySection.tsx` | Shows the notice; the "no policy" warning does not promise automatic deletes |
+| `apps/studio/components/interfaces/Storage/StoragePolicies/BucketLifecycleRules/BucketLifecycleRules.tsx`  | Shows the notice                                                             |
+| `apps/studio/components/interfaces/App/FeaturePreview/StorageVersioningPreview.tsx`                        | One self-hosted sentence about lifecycle rules                               |
+
+**The storage handlers** (upstream files under `apps/studio/pages/api/platform/storage/[ref]/buckets/`):
+`index.ts` (create) passes `versioning_status` on when it is `ENABLED`, so a create still works
+against an older storage-api; `[id]/index.ts` (update) passes a status change on;
+`[id]/objects/move.ts` passes `sourceVersionId` (restoring a version); `[id]/objects/sign.ts` and
+`[id]/objects/public-url.ts` pass `options.versionId` and nothing else from `options`, as before. The
+new `[id]/lifecycle.ts` (`GET`, `PUT`, `DELETE`, with a TanStack mirror) maps the platform's
+snake_case to storage-js and passes storage-api's own status on, so a bucket without a policy is a 404. Tests: `apps/studio/tests/pages/api/platform/storage/[ref]/buckets/versioning.test.ts`.
+
 ## Theme spot color
 
 Account → Preferences → Appearance has a spot color (primary hue) slider that upstream shows only

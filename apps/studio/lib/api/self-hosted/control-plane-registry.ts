@@ -72,6 +72,7 @@ export const STACK_SETTINGS: Readonly<Record<string, string>> = {
   GOTRUE_SMS_AUTOCONFIRM: 'true',
   UPLOAD_FILE_SIZE_LIMIT: '524288000',
   ENABLE_IMAGE_TRANSFORMATION: 'true',
+  STORAGE_VERSIONING_ENABLED: 'true',
   PGRST_DB_SCHEMAS: 'public,storage,graphql_public',
   PGRST_DB_MAX_ROWS: '1000',
   PGRST_DB_EXTRA_SEARCH_PATH: 'public',

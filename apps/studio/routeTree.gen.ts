@@ -333,6 +333,7 @@ import { Route as ApiPlatformProjectsRefContentFoldersIdRouteImport } from './ro
 import { Route as ApiPlatformProjectsRefContentItemIdRouteImport } from './routes/api/platform/projects/$ref/content/item/$id'
 import { Route as ApiPlatformStorageRefBucketsIdIndexRouteImport } from './routes/api/platform/storage/$ref/buckets/$id/index'
 import { Route as ApiPlatformStorageRefBucketsIdEmptyRouteImport } from './routes/api/platform/storage/$ref/buckets/$id/empty'
+import { Route as ApiPlatformStorageRefBucketsIdLifecycleRouteImport } from './routes/api/platform/storage/$ref/buckets/$id/lifecycle'
 import { Route as ApiPlatformStorageRefVectorBucketsIdIndexRouteImport } from './routes/api/platform/storage/$ref/vector-buckets/$id/index'
 import { Route as ApiV1ProjectsRefFunctionsSlugIndexRouteImport } from './routes/api/v1/projects/$ref/functions/$slug/index'
 import { Route as ApiV1ProjectsRefFunctionsSlugBodyRouteImport } from './routes/api/v1/projects/$ref/functions/$slug/body'
@@ -2160,6 +2161,12 @@ const ApiPlatformStorageRefBucketsIdEmptyRoute =
     path: '/api/platform/storage/$ref/buckets/$id/empty',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPlatformStorageRefBucketsIdLifecycleRoute =
+  ApiPlatformStorageRefBucketsIdLifecycleRouteImport.update({
+    id: '/api/platform/storage/$ref/buckets/$id/lifecycle',
+    path: '/api/platform/storage/$ref/buckets/$id/lifecycle',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPlatformStorageRefVectorBucketsIdIndexRoute =
   ApiPlatformStorageRefVectorBucketsIdIndexRouteImport.update({
     id: '/api/platform/storage/$ref/vector-buckets/$id/',
@@ -2577,6 +2584,7 @@ export interface FileRoutesByFullPath {
   '/api/platform/projects/$ref/content/folders/$id': typeof ApiPlatformProjectsRefContentFoldersIdRoute
   '/api/platform/projects/$ref/content/item/$id': typeof ApiPlatformProjectsRefContentItemIdRoute
   '/api/platform/storage/$ref/buckets/$id/empty': typeof ApiPlatformStorageRefBucketsIdEmptyRoute
+  '/api/platform/storage/$ref/buckets/$id/lifecycle': typeof ApiPlatformStorageRefBucketsIdLifecycleRoute
   '/api/v1/projects/$ref/functions/$slug/body': typeof ApiV1ProjectsRefFunctionsSlugBodyRoute
   '/api/platform/auth/$ref/users/$id/': typeof ApiPlatformAuthRefUsersIdIndexRoute
   '/api/platform/projects/$ref/content/folders/': typeof ApiPlatformProjectsRefContentFoldersIndexRoute
@@ -2902,6 +2910,7 @@ export interface FileRoutesByTo {
   '/api/platform/projects/$ref/content/folders/$id': typeof ApiPlatformProjectsRefContentFoldersIdRoute
   '/api/platform/projects/$ref/content/item/$id': typeof ApiPlatformProjectsRefContentItemIdRoute
   '/api/platform/storage/$ref/buckets/$id/empty': typeof ApiPlatformStorageRefBucketsIdEmptyRoute
+  '/api/platform/storage/$ref/buckets/$id/lifecycle': typeof ApiPlatformStorageRefBucketsIdLifecycleRoute
   '/api/v1/projects/$ref/functions/$slug/body': typeof ApiV1ProjectsRefFunctionsSlugBodyRoute
   '/api/platform/auth/$ref/users/$id': typeof ApiPlatformAuthRefUsersIdIndexRoute
   '/api/platform/projects/$ref/content/folders': typeof ApiPlatformProjectsRefContentFoldersIndexRoute
@@ -3245,6 +3254,7 @@ export interface FileRoutesById {
   '/api/platform/projects/$ref/content/folders/$id': typeof ApiPlatformProjectsRefContentFoldersIdRoute
   '/api/platform/projects/$ref/content/item/$id': typeof ApiPlatformProjectsRefContentItemIdRoute
   '/api/platform/storage/$ref/buckets/$id/empty': typeof ApiPlatformStorageRefBucketsIdEmptyRoute
+  '/api/platform/storage/$ref/buckets/$id/lifecycle': typeof ApiPlatformStorageRefBucketsIdLifecycleRoute
   '/api/v1/projects/$ref/functions/$slug/body': typeof ApiV1ProjectsRefFunctionsSlugBodyRoute
   '/api/platform/auth/$ref/users/$id/': typeof ApiPlatformAuthRefUsersIdIndexRoute
   '/api/platform/projects/$ref/content/folders/': typeof ApiPlatformProjectsRefContentFoldersIndexRoute
@@ -3587,6 +3597,7 @@ export interface FileRouteTypes {
     | '/api/platform/projects/$ref/content/folders/$id'
     | '/api/platform/projects/$ref/content/item/$id'
     | '/api/platform/storage/$ref/buckets/$id/empty'
+    | '/api/platform/storage/$ref/buckets/$id/lifecycle'
     | '/api/v1/projects/$ref/functions/$slug/body'
     | '/api/platform/auth/$ref/users/$id/'
     | '/api/platform/projects/$ref/content/folders/'
@@ -3912,6 +3923,7 @@ export interface FileRouteTypes {
     | '/api/platform/projects/$ref/content/folders/$id'
     | '/api/platform/projects/$ref/content/item/$id'
     | '/api/platform/storage/$ref/buckets/$id/empty'
+    | '/api/platform/storage/$ref/buckets/$id/lifecycle'
     | '/api/v1/projects/$ref/functions/$slug/body'
     | '/api/platform/auth/$ref/users/$id'
     | '/api/platform/projects/$ref/content/folders'
@@ -4254,6 +4266,7 @@ export interface FileRouteTypes {
     | '/api/platform/projects/$ref/content/folders/$id'
     | '/api/platform/projects/$ref/content/item/$id'
     | '/api/platform/storage/$ref/buckets/$id/empty'
+    | '/api/platform/storage/$ref/buckets/$id/lifecycle'
     | '/api/v1/projects/$ref/functions/$slug/body'
     | '/api/platform/auth/$ref/users/$id/'
     | '/api/platform/projects/$ref/content/folders/'
@@ -4393,6 +4406,7 @@ export interface RootRouteChildren {
   ApiPlatformProjectsRefContentFoldersIdRoute: typeof ApiPlatformProjectsRefContentFoldersIdRoute
   ApiPlatformProjectsRefContentItemIdRoute: typeof ApiPlatformProjectsRefContentItemIdRoute
   ApiPlatformStorageRefBucketsIdEmptyRoute: typeof ApiPlatformStorageRefBucketsIdEmptyRoute
+  ApiPlatformStorageRefBucketsIdLifecycleRoute: typeof ApiPlatformStorageRefBucketsIdLifecycleRoute
   ApiV1ProjectsRefFunctionsSlugBodyRoute: typeof ApiV1ProjectsRefFunctionsSlugBodyRoute
   ApiPlatformAuthRefUsersIdIndexRoute: typeof ApiPlatformAuthRefUsersIdIndexRoute
   ApiPlatformProjectsRefContentFoldersIndexRoute: typeof ApiPlatformProjectsRefContentFoldersIndexRoute
@@ -6683,6 +6697,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPlatformStorageRefBucketsIdEmptyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/platform/storage/$ref/buckets/$id/lifecycle': {
+      id: '/api/platform/storage/$ref/buckets/$id/lifecycle'
+      path: '/api/platform/storage/$ref/buckets/$id/lifecycle'
+      fullPath: '/api/platform/storage/$ref/buckets/$id/lifecycle'
+      preLoaderRoute: typeof ApiPlatformStorageRefBucketsIdLifecycleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/platform/storage/$ref/vector-buckets/$id/': {
       id: '/api/platform/storage/$ref/vector-buckets/$id/'
       path: '/api/platform/storage/$ref/vector-buckets/$id'
@@ -7704,6 +7725,8 @@ const rootRouteChildren: RootRouteChildren = {
     ApiPlatformProjectsRefContentItemIdRoute,
   ApiPlatformStorageRefBucketsIdEmptyRoute:
     ApiPlatformStorageRefBucketsIdEmptyRoute,
+  ApiPlatformStorageRefBucketsIdLifecycleRoute:
+    ApiPlatformStorageRefBucketsIdLifecycleRoute,
   ApiV1ProjectsRefFunctionsSlugBodyRoute:
     ApiV1ProjectsRefFunctionsSlugBodyRoute,
   ApiPlatformAuthRefUsersIdIndexRoute: ApiPlatformAuthRefUsersIdIndexRoute,

@@ -146,9 +146,11 @@ export const useFeaturePreviews = (): FeaturePreview[] => {
         category: 'storage',
         discussionsUrl: undefined,
         isNew: true,
-        isPlatformOnly: true,
-        isDefaultOptIn: true,
-        enabled: isStorageVersioningEnabled,
+        // Self-hosted the flag can never be on, and the fork's storage handlers serve versioning
+        // where the project's storage-api has it (FORK.md), so the preview is offered — opt-in there.
+        isPlatformOnly: IS_PLATFORM,
+        isDefaultOptIn: IS_PLATFORM,
+        enabled: isStorageVersioningEnabled || !IS_PLATFORM,
         getRoute: (ref?: string) => `/project/${ref}/storage/files`,
       },
     ]

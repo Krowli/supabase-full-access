@@ -5,7 +5,6 @@ import { listBucketObjectsV2 } from '../bucket-objects-list-mutation'
 import { storageKeys } from '../keys'
 import { dropPartialTrailingPath, toArchivedObjects } from './archived-objects-query'
 import { EMPTY_FOLDER_PLACEHOLDER_FILE_NAME } from '@/components/interfaces/Storage/StorageExplorer/StorageExplorer.utils'
-import { IS_PLATFORM } from '@/lib/constants'
 import type { StudioError } from '@/lib/errors/studio-errors'
 
 type StorageObjectV2 = components['schemas']['StorageListResponseV2_Output']['objects'][number]
@@ -80,5 +79,6 @@ export const archivedObjectNamesQueryOptions = ({
   queryOptions({
     queryKey: storageKeys.archivedObjectNames(projectRef, bucketId, path),
     queryFn: ({ signal }) => getArchivedObjectNames({ projectRef, bucketId, path }, signal),
-    enabled: IS_PLATFORM && typeof projectRef !== 'undefined' && typeof bucketId !== 'undefined',
+    // Fork: self-hosted serves this from pages/api/platform/storage (FORK.md, object versioning).
+    enabled: typeof projectRef !== 'undefined' && typeof bucketId !== 'undefined',
   })
