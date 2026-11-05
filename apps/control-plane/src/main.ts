@@ -1,12 +1,13 @@
 import pg from 'pg'
 
 import { loadConfig } from './config.ts'
-import { createCoolifyClient, resolveCoolifyTarget } from './coolify.ts'
+import { createCoolifyClient, resolveCoolifyTarget, type Coolify } from './coolify.ts'
 import { KongGateway, dashboardHost, renderKongConfig, type GatewayProject } from './kong.ts'
 import { createMinioStorage } from './minio.ts'
 import { createProjectDirs } from './project-dirs.ts'
 import { Provisioner, routedProjects } from './provisioner.ts'
 import { createPgRegistry, migrate } from './registry.ts'
+import { createRunnerClient } from './runner-client.ts'
 import { createApp } from './server.ts'
 import { loadTemplate, renderTemplate, serviceEnvs, templateValues } from './template.ts'
 import { createRealtimeTenants, createSupavisorTenants } from './tenants.ts'
@@ -15,12 +16,20 @@ const config = loadConfig()
 const log = (event: string, fields: Record<string, unknown>) =>
   console.log(JSON.stringify({ time: new Date().toISOString(), event, ...fields }))
 
-const coolifyTarget = await resolveCoolifyTarget(config.coolify)
-log('coolify.target', {
-  project: coolifyTarget.projectUuid,
-  server: coolifyTarget.serverUuid,
-  environment: coolifyTarget.environment,
-})
+// The project stacks run through Coolify's API, or through the platform's runner (no Coolify).
+let stacks: Coolify
+if (config.stackBackend === 'runner') {
+  stacks = createRunnerClient(config.runner)
+  log('stacks.backend', { backend: 'runner', url: config.runner.url })
+} else {
+  const coolifyTarget = await resolveCoolifyTarget(config.coolify)
+  log('coolify.target', {
+    project: coolifyTarget.projectUuid,
+    server: coolifyTarget.serverUuid,
+    environment: coolifyTarget.environment,
+  })
+  stacks = createCoolifyClient(coolifyTarget)
+}
 
 const pool = new pg.Pool({ connectionString: config.registryDatabaseUrl, max: 5 })
 await migrate(pool)
@@ -55,7 +64,7 @@ const template = loadTemplate(config.templatePath)
 const admin = { adminJwtSecret: config.adminJwtSecret }
 const provisioner = new Provisioner({
   registry,
-  coolify: createCoolifyClient(coolifyTarget),
+  coolify: stacks,
   renderCompose: (ref) =>
     renderTemplate(
       template,

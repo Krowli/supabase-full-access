@@ -21,9 +21,13 @@ const config = {
   secretsKey: req('PLATFORM_SECRETS_KEY'),
   apiToken: req('CONTROL_PLANE_TOKEN'),
   controlPlaneUrl: env.CONTROL_PLANE_URL ?? 'http://control-plane:8080',
-  coolifyUrl: req('COOLIFY_URL').replace(/\/+$/, ''),
-  coolifyToken: req('COOLIFY_TOKEN'),
-  resourceUuid: env.COOLIFY_RESOURCE_UUID ?? '',
+  // Who restarts a project after a restore: Coolify (default) or the runner (STACK_BACKEND=runner).
+  stackBackend: env.STACK_BACKEND || 'coolify',
+  coolifyUrl: (env.STACK_BACKEND === 'runner' ? (env.COOLIFY_URL ?? '') : req('COOLIFY_URL')).replace(/\/+$/, ''),
+  coolifyToken: env.STACK_BACKEND === 'runner' ? (env.COOLIFY_TOKEN ?? '') : req('COOLIFY_TOKEN'),
+  resourceUuid: env.STACK_BACKEND === 'runner' ? '' : (env.COOLIFY_RESOURCE_UUID ?? ''),
+  runnerUrl: (env.RUNNER_URL ?? 'http://runner:8080').replace(/\/+$/, ''),
+  runnerToken: env.STACK_BACKEND === 'runner' ? req('RUNNER_TOKEN') : '',
   domainSuffix: req('PROJECT_DOMAIN_SUFFIX'),
   projectsHostDir: req('PROJECTS_HOST_DIR'),
   stageDir: env.STAGE_DIR ?? '/stage',
@@ -129,7 +133,16 @@ const service = new BackupService({
       return r.code === 0 ? r.stdout.trim() : null
     }
     const before = await started()
-    await coolify('POST', `/services/${encodeURIComponent(uuid)}/restart`)
+    if (config.stackBackend === 'runner') {
+      const res = await fetch(`${config.runnerUrl}/stacks/${encodeURIComponent(uuid)}/restart`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.runnerToken}` },
+        signal: AbortSignal.timeout(10 * 60_000),
+      })
+      if (!res.ok) throw new Error(`Runner restart of ${uuid} -> ${res.status}`)
+    } else {
+      await coolify('POST', `/services/${encodeURIComponent(uuid)}/restart`)
+    }
     const deadline = Date.now() + 5 * 60_000
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3000))
