@@ -182,9 +182,14 @@ export class Stacks {
     if (missing.length) throw new StackInputError(`Stack ${meta.id} lacks ${missing.join(', ')}`)
     const containers = await this.writeFiles(meta)
     const { docker, sharedNetwork } = this.config
+    const dir = this.stackDir(meta.id)
     await docker.ensureNetwork(meta.id)
-    await docker.compose(meta.id, this.stackDir(meta.id), ['up', '-d', '--remove-orphans', ...extra])
+    // Create (and, when the template changed, recreate) the containers without starting them, attach
+    // them to the shared network, then start them: a container that crashes at once (a service
+    // whose dependency is down) is attached all the same, and nothing runs unreachable meanwhile.
+    await docker.compose(meta.id, dir, ['up', '--no-start', '--remove-orphans'])
     for (const container of containers) await docker.attach(container, sharedNetwork, container)
+    await docker.compose(meta.id, dir, ['up', '-d', '--remove-orphans', ...extra])
   }
 
   async start(id: string): Promise<void> {

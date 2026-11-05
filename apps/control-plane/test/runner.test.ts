@@ -112,7 +112,11 @@ describe('Stacks', () => {
     expect((await stat(env)).mode & 0o777).toBe(0o600)
     expect(await readFile(env, 'utf8')).toContain('PROJECT_DB_PASSWORD=pw1\n')
     await stacks.start(id)
-    expect(docker.calls).toEqual([`network ensure ${id}`, `compose ${id} up -d --remove-orphans`])
+    expect(docker.calls).toEqual([
+      `network ensure ${id}`,
+      `compose ${id} up --no-start --remove-orphans`,
+      `compose ${id} up -d --remove-orphans`,
+    ])
     expect(await readFile(join(dir, id, 'compose.yaml'), 'utf8')).toContain(`container_name: supabase-db-${id}`)
     expect(await readFile(join(dir, id, 'volumes/db/roles.sql'), 'utf8')).toContain('ALTER USER authenticator')
     expect(docker.attached).toEqual(
@@ -134,7 +138,12 @@ describe('Stacks', () => {
     await stacks.update(id)
     expect(docker.calls).toEqual([])
     await stacks.restart(id)
-    expect(docker.calls).toEqual([`network ensure ${id}`, `compose ${id} up -d --remove-orphans`, `compose ${id} restart`])
+    expect(docker.calls).toEqual([
+      `network ensure ${id}`,
+      `compose ${id} up --no-start --remove-orphans`,
+      `compose ${id} up -d --remove-orphans`,
+      `compose ${id} restart`,
+    ])
     await stacks.delete(id)
     expect(docker.calls.slice(-2)).toEqual([`compose ${id} down --volumes --remove-orphans`, `network rm ${id}`])
     expect(await stacks.find(REF)).toBeNull()

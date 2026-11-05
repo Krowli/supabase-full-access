@@ -23,7 +23,9 @@ RUN apk add --no-cache docker-cli docker-cli-compose
 ENV RUNNER_PORT=8080
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1
-CMD ["node", "src/runner/main.ts"]
+# `docker run <image>` serves; `docker run -i <image> adopt <ref> <id>` / `render <ref> <id>` run once.
+ENTRYPOINT ["node", "src/runner/main.ts"]
+CMD ["serve"]
 
 # The control plane and the backup service: the last stage, so a build without --target (Coolify's)
 # gets it as before.

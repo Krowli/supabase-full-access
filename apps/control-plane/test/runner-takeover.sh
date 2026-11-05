@@ -39,7 +39,7 @@ runner() {
     -e PROJECT_IMGPROXY_URL=http://imgproxy.invalid:8080 -e PROJECTS_HOST_DIR="$WORK/projects" \
     "$@"
 }
-psql_x() { docker exec "supabase-db-$ID" psql -U supabase_admin -d postgres -Atc "$1"; }
+psql_x() { docker exec -e PGPASSWORD="$PW" "supabase-db-$ID" psql -h 127.0.0.1 -U supabase_admin -d postgres -Atc "$1"; }
 
 say "1. A stack as Coolify runs one: compose project $ID, its own network, shared network attached by hand"
 docker network create "$SHARED" >/dev/null
