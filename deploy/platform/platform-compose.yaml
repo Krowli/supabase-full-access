@@ -254,6 +254,11 @@ services:
       - 'COOLIFY_URL=${CONTROL_PLANE_COOLIFY_URL:-https://coolify-admin.example.com/api/v1}'
       - 'COOLIFY_TOKEN=${CONTROL_PLANE_COOLIFY_TOKEN:?}'
       - COOLIFY_ENVIRONMENT=projects
+      # coolify (default): project stacks through Coolify's API; runner: through the runner below,
+      # with docker compose on this server and no Coolify (src/runner, SPEC.md §21).
+      - 'STACK_BACKEND=${STACK_BACKEND:-coolify}'
+      - 'RUNNER_URL=http://runner:8080'
+      - 'RUNNER_TOKEN=${SERVICE_PASSWORD_64_RUNNER}'
       - 'REGISTRY_DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_PLATFORMDB}@platform-db:5432/_supabase'
       # 64 hex characters: encrypts every project's secrets in the registry. Losing it loses them.
       - 'PLATFORM_SECRETS_KEY=${SERVICE_HEX_64_SECRETSKEY}'
@@ -308,6 +313,10 @@ services:
       - PORT=8080
       - 'COOLIFY_URL=${CONTROL_PLANE_COOLIFY_URL:-https://coolify-admin.example.com/api/v1}'
       - 'COOLIFY_TOKEN=${CONTROL_PLANE_COOLIFY_TOKEN:?}'
+      # Who restarts a project after a restore: as the control plane's STACK_BACKEND.
+      - 'STACK_BACKEND=${STACK_BACKEND:-coolify}'
+      - 'RUNNER_URL=http://runner:8080'
+      - 'RUNNER_TOKEN=${SERVICE_PASSWORD_64_RUNNER}'
       - 'REGISTRY_DATABASE_URL=postgres://postgres:${SERVICE_PASSWORD_PLATFORMDB}@platform-db:5432/_supabase'
       - 'PLATFORM_DB_PASSWORD=${SERVICE_PASSWORD_PLATFORMDB}'
       - 'PLATFORM_SECRETS_KEY=${SERVICE_HEX_64_SECRETSKEY}'
@@ -334,6 +343,29 @@ services:
     networks:
       coolify:
         aliases: [supa-platform-backup]
+
+  runner:
+    # Runs the project stacks with docker compose when STACK_BACKEND is runner (apps/control-plane/
+    # src/runner, SPEC.md §21); idle while it is coolify. The only container with the Docker socket:
+    # it deploys the project template baked into its image and nothing else, and takes refs and
+    # project secrets, never compose text. Only this stack's network reaches it (not `coolify`).
+    # Stack files, each project's .env (mode 600) among them, live in /data/supa-runner on the host.
+    build:
+      context: .
+      dockerfile: apps/control-plane/Dockerfile
+      target: runner
+    environment:
+      - 'RUNNER_TOKEN=${SERVICE_PASSWORD_64_RUNNER}'
+      - RUNNER_STACKS_DIR=/data/supa-runner/stacks
+      - RUNNER_SHARED_NETWORK=coolify
+      - 'PROJECT_DOMAIN_SUFFIX=${PROJECT_DOMAIN_SUFFIX:-supa.example.com}'
+      - 'PROJECT_S3_ENDPOINT=http://supa-platform-minio:9000'
+      - 'PROJECT_IMGPROXY_URL=http://supa-platform-imgproxy:8080'
+      - PROJECTS_HOST_DIR=/data/supa-platform/projects
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock'
+      # The same path inside and out: compose resolves the stacks' bind sources on the host.
+      - '/data/supa-runner:/data/supa-runner'
 
   studio:
     # Multi-project Studio (.github/workflows/studio-fork-publish.yml run on main with
