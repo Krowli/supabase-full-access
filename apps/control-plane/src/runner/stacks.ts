@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto'
-import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import {
@@ -51,6 +51,12 @@ export type StacksConfig = {
   render: (ref: string) => string
   docker: Docker
 }
+
+const exists = (path: string) =>
+  stat(path).then(
+    () => true,
+    () => false
+  )
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
 const newId = () => Array.from({ length: 24 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('')
@@ -151,6 +157,9 @@ export class Stacks {
   async get(id: string): Promise<StackState | null> {
     const meta = await this.meta(id)
     if (!meta) return null
+    // A stack registered but not started yet has no compose.yaml, and compose refuses to run
+    // without one: nothing of it runs.
+    if (!(await exists(join(this.stackDir(id), 'compose.yaml')))) return { ...meta, status: 'exited' }
     const ps = await this.config.docker.compose(id, this.stackDir(id), ['ps', '-a', '--format', 'json'])
     return { ...meta, status: stackStatus(ps) }
   }

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -42,6 +43,8 @@ class FakeDocker implements Docker {
   async compose(id: string, dir: string, args: string[]) {
     this.calls.push(`compose ${id} ${args.join(' ')}`)
     expect(dir.endsWith(id)).toBe(true)
+    // Like docker compose: no compose file, no command.
+    if (!existsSync(join(dir, 'compose.yaml'))) throw new Error(`compose file ${dir}/compose.yaml is invalid: no such file`)
     if (args[0] === 'up') this.up.add(id)
     if (args[0] === 'down') this.up.delete(id)
     if (args[0] === 'ps') {
