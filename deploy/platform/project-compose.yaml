@@ -347,7 +347,7 @@ services:
       - GOTRUE_MAILER_TEMPLATE_RELOADING_ENABLED=true
       - GOTRUE_MAILER_TEMPLATE_MAX_AGE=1m
   supabase-storage:
-    image: 'supabase/storage-api:v1.44.2'
+    image: 'supabase/storage-api:v1.84.14'
     # storage-api reads its settings only when it starts, so this loop restarts it (inside the
     # container, a few seconds) whenever Studio rewrites storage.env: a save applies by itself.
     # If storage-api dies on its own, the container exits with its code and Docker restarts it.
@@ -412,6 +412,10 @@ services:
       - ENABLE_IMAGE_TRANSFORMATION=true
       - 'IMGPROXY_URL={{IMGPROXY_URL}}'
       - IMGPROXY_REQUEST_TIMEOUT=15
+      # Object versioning and lifecycle rules (storage-api >= 1.80). Buckets keep versioning off until
+      # it is turned on for one; lifecycle rules are stored but storage-api does not apply them.
+      - STORAGE_VERSIONING_ENABLED=true
+      - STORAGE_LIFECYCLE_ENABLED=true
       - DATABASE_SEARCH_PATH=storage
       - NODE_ENV=production
       - REQUEST_ALLOW_X_FORWARDED_PATH=true
