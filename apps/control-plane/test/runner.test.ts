@@ -94,7 +94,7 @@ class FakeDocker implements Docker {
     return this.scratchRunning
   }
   async logs() {
-    return 'FATAL:  recovery ended before configured recovery target was reached\n'
+    return 'INFO: 2026/11/06 12:19:32 Finished extraction of backup_label.tar.zst\nBackup extraction complete.\nFATAL:  recovery ended before configured recovery target was reached\n'
   }
 }
 
@@ -341,7 +341,7 @@ describe('point-in-time recovery of a stack database', () => {
     expect(args).toContain('--network shared-net')
     expect(args).toContain(`-v ${id}_supabase-db-config:/etc/postgresql-custom:ro`)
     expect(args).toContain(`-v pitr-${id}-data:/var/lib/postgresql/data`)
-    expect(args).toContain('-e PITR_TARGET=2026-11-06T10:15:00.000Z')
+    expect(docker.runs[0]).toContain('PITR_TARGET=2026-11-06 10:15:00.000+00')
     expect(args).toContain('supabase/postgres:15.8.1.085 -c')
     const script = docker.runs[0].at(-1)!
     expect(script).toContain('-c archive_mode=off')
@@ -353,7 +353,7 @@ describe('point-in-time recovery of a stack database', () => {
   it('reports a copy that stopped (the moment is past the archive) and removes it', async () => {
     docker.scratchRunning = false
     await expect(pitr.startScratch(id, 'base_000000010000000000000009', '2026-11-06T10:15:00Z')).rejects.toThrow(
-      /stopped: FATAL: +recovery ended before configured recovery target/
+      /stopped: Backup extraction complete\. \| FATAL: +recovery ended before configured recovery target was reached$/
     )
     expect(docker.removed.filter((r) => r === `pitr-${id}`)).toHaveLength(2)
   })

@@ -1707,6 +1707,9 @@ project; needs `STACK_BACKEND=runner` (§21). The nightly restic backups (§19) 
 - **Off again.** Removing `pitr: true` stops the base backups only: the database keeps archiving with
   the settings in its volume. `DELETE /stacks/<id>/wal-g` writes `archive_mode = off` (at the next
   restart) and `archive_command = '/bin/true'` until then, and removes `wal-g.json`.
+- **A deleted project's** WAL folder goes with its restic repository, `deleted_project_retention_days`
+  after the deletion. That removal starts from the projects with nightly backups: a project deleted
+  before its first one keeps its WAL folder until removed by hand.
 - **Health.** `/health` is 503 when archiving has failed for more than 10 minutes, when the last
   base backup failed or is a day overdue, or when the destination has a lifecycle rule that deletes
   old files.

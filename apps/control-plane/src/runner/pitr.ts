@@ -107,7 +107,8 @@ export class Pitr {
       '-v', `${scratchVolume(id)}:${PGDATA}`,
       '-v', `${id}_supabase-db-config:${CONFIG_DIR}:ro`,
       '-e', `PITR_BACKUP=${backupName}`,
-      '-e', `PITR_TARGET=${targetTime}`,
+      // recovery_target_time takes "2026-11-06 12:19:22.100+00", not ISO 8601's T and Z.
+      '-e', `PITR_TARGET=${targetTime.replace('T', ' ').replace(/Z$/, '+00')}`,
       '--entrypoint', 'bash',
       image, '-c', SCRATCH_SCRIPT,
     ])
@@ -115,9 +116,10 @@ export class Pitr {
     const deadline = Date.now() + (this.config.scratchTimeoutMs ?? 60 * 60_000)
     while (Date.now() < deadline) {
       if (!(await docker.running(name))) {
-        const logs = await docker.logs(name, 8)
+        // Its last lines say why (Postgres's FATAL comes after wal-g's progress lines).
+        const logs = (await docker.logs(name, 8)).trim().split('\n').slice(-2).join(' | ')
         await this.dropScratch(id)
-        throw new Error(`The copy at ${targetTime} stopped: ${logs.trim().slice(-600)}`)
+        throw new Error(`The copy at ${targetTime} stopped: ${logs.slice(-400)}`)
       }
       const state = await docker
         .exec(name, 'postgres', ['psql', '-h', '127.0.0.1', '-U', 'supabase_admin', '-d', 'postgres', '-At', '-c', READY_SQL], undefined, 30_000)

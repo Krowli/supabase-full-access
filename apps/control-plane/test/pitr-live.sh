@@ -38,8 +38,12 @@ until_true() { # until_true <seconds> <what> <command...>
   fail "$what (waited ${limit}s)"
 }
 
-REF=""; NEW=""
+REF=""; NEW=""; ID=""
 cleanup() {
+  # Its WAL and base backups first: the usual removal of a deleted project's backups starts from
+  # its nightly ones, and this project has none.
+  [ -n "$ID" ] && docker exec -u postgres "supabase-db-$ID" /usr/local/bin/wal-g delete everything FORCE --confirm \
+    --config /etc/postgresql-custom/wal-g.json >/dev/null 2>&1 || true
   for r in "$NEW" "$REF"; do [ -n "$r" ] && call cp DELETE "/projects/$r" >/dev/null 2>&1 || true; done
 }
 trap cleanup EXIT
