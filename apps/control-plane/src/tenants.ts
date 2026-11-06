@@ -96,6 +96,15 @@ export function createSupavisorTenants(config: AdminApiConfig): TenantRegistry {
  * Realtime: POST /api/tenants creates; an existing tenant is left as it is. Realtime picks the
  * tenant from the first label of the Host header, so Kong preserves `<ref>.<suffix>`.
  */
+/**
+ * For a platform without Realtime (its compose profile off): a project gets no Realtime tenant and
+ * has none to remove. Turning Realtime on later needs a tenant for each project made meanwhile.
+ */
+export const noTenants: TenantRegistry = {
+  async ensure() {},
+  async remove() {},
+}
+
 export function createRealtimeTenants(config: AdminApiConfig): TenantRegistry {
   const call = adminCaller('Realtime', config)
   return {

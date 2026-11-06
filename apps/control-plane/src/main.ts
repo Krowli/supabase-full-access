@@ -10,7 +10,7 @@ import { createPgRegistry, migrate } from './registry.ts'
 import { createRunnerClient } from './runner-client.ts'
 import { createApp } from './server.ts'
 import { loadTemplate, renderTemplate, serviceEnvs, templateValues } from './template.ts'
-import { createRealtimeTenants, createSupavisorTenants } from './tenants.ts'
+import { createRealtimeTenants, createSupavisorTenants, noTenants } from './tenants.ts'
 
 const config = loadConfig()
 const log = (event: string, fields: Record<string, unknown>) =>
@@ -74,7 +74,7 @@ const provisioner = new Provisioner({
   storage: createMinioStorage(config.minio),
   projectDirs: createProjectDirs(config.projectsHostDir),
   pooler: createSupavisorTenants({ url: config.supavisorUrl, ...admin }),
-  realtime: createRealtimeTenants({ url: config.realtimeUrl, ...admin }),
+  realtime: config.realtimeEnabled ? createRealtimeTenants({ url: config.realtimeUrl, ...admin }) : noTenants,
   gateway,
   healthTimeoutMs: config.healthTimeoutMs,
   pollIntervalMs: config.pollIntervalMs,

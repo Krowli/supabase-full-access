@@ -30,6 +30,8 @@ export type Config = {
   kong: { adminUrl: string; adminToken: string }
   supavisorUrl: string
   realtimeUrl: string
+  /** false (REALTIME_ENABLED=false): the platform runs without Realtime; projects get no tenant. */
+  realtimeEnabled: boolean
   adminJwtSecret: string
   minio: { url: string; rootUser: string; rootPassword: string }
   /** Studio, routed by Kong at studio.<suffix> with basic auth, when DASHBOARD_URL is set. */
@@ -87,6 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     supavisorUrl: env.SUPAVISOR_URL ?? 'http://supavisor:4000',
     realtimeUrl: env.REALTIME_URL ?? 'http://realtime:4000',
+    realtimeEnabled: env.REALTIME_ENABLED !== 'false',
     adminJwtSecret: req('PLATFORM_ADMIN_JWT_SECRET'),
     minio: {
       url: env.MINIO_URL ?? 'http://minio:9000',
