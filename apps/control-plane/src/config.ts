@@ -2,12 +2,19 @@ import { resolve } from 'node:path'
 
 import type { CoolifyTargetConfig } from './coolify.ts'
 import type { DashboardOptions } from './kong.ts'
+import type { RunnerConfig } from './runner-client.ts'
 import { parseSecretsKey } from './secrets.ts'
 import type { SharedEndpoints } from './template.ts'
 
 export type Config = {
   port: number
+  /**
+   * Who runs the project stacks: Coolify (its API, the default) or the platform's runner
+   * (src/runner, Docker on this server, no Coolify). STACK_BACKEND=runner.
+   */
+  stackBackend: 'coolify' | 'runner'
   coolify: CoolifyTargetConfig
+  runner: RunnerConfig
   registryDatabaseUrl: string
   secretsKey: Buffer
   apiToken: string
@@ -41,19 +48,29 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     return value ?? ''
   }
 
+  const stackBackend = env.STACK_BACKEND || 'coolify'
+  if (stackBackend !== 'coolify' && stackBackend !== 'runner')
+    throw new Error(`STACK_BACKEND is coolify or runner, not ${stackBackend}`)
+  const useCoolify = stackBackend === 'coolify'
   // Project and server: explicit, or taken from the platform's own Coolify application
-  // (resolveCoolifyTarget in src/coolify.ts).
+  // (resolveCoolifyTarget in src/coolify.ts). Not needed with the runner.
   const coolify: CoolifyTargetConfig = {
-    url: req('COOLIFY_URL'),
-    token: req('COOLIFY_TOKEN'),
+    url: useCoolify ? req('COOLIFY_URL') : (env.COOLIFY_URL ?? ''),
+    token: useCoolify ? req('COOLIFY_TOKEN') : (env.COOLIFY_TOKEN ?? ''),
     projectUuid: env.COOLIFY_PROJECT_UUID || undefined,
     serverUuid: env.COOLIFY_SERVER_UUID || undefined,
     resourceUuid: env.COOLIFY_RESOURCE_UUID || undefined,
     environment: env.COOLIFY_ENVIRONMENT || 'projects',
   }
+  const runner: RunnerConfig = {
+    url: env.RUNNER_URL ?? 'http://runner:8080',
+    token: useCoolify ? (env.RUNNER_TOKEN ?? '') : req('RUNNER_TOKEN'),
+  }
   const config = {
     port: Number(env.PORT ?? 8080),
+    stackBackend: stackBackend as Config['stackBackend'],
     coolify,
+    runner,
     registryDatabaseUrl: req('REGISTRY_DATABASE_URL'),
     rawKey: req('PLATFORM_SECRETS_KEY'),
     apiToken: req('CONTROL_PLANE_TOKEN'),

@@ -1652,3 +1652,31 @@ settings, sign-up, sign-in, `/auth/v1/user` and REST as that user, then both del
   for billing/usage/subscription/invoices, the org page has no plan. The self-hosted settings menu
   never had the Billing group (`SettingsMenu.utils.tsx` returns early for `!IS_PLATFORM`; guarded
   by `SettingsMenu.selfhosted.test.tsx`).
+
+## 21. The runner: project stacks without Coolify (2026-11)
+
+`STACK_BACKEND=runner` makes the control plane run project stacks through the `runner` service of
+this stack instead of Coolify's API (default `coolify`; nothing changes until it is set, on the
+control plane and the backup service alike).
+
+- **What it is.** `apps/control-plane/src/runner`, the same image with the docker CLI and compose
+  (Dockerfile target `runner`). The only container with the Docker socket. Its API (bearer token
+  `RUNNER_TOKEN`, on this stack's network only) mirrors the provisioner's few Coolify calls:
+  find, create, status, envs, start, update, restart, delete of the stack of a ref.
+- **What it does not take.** Compose text. It deploys the project template baked into its image,
+  so whoever can call it can create, restart and delete project stacks and nothing else; with
+  Coolify the token could deploy anything. Variables are limited to the six the template reads,
+  values to `[A-Za-z0-9._-]`; a stack that lacks one is not started (compose would fill an empty
+  password).
+- **Names.** A stack is the compose project `<id>` (24 lowercase letters and digits, the shape of a
+  Coolify uuid): containers `<service>-<id>`, volumes `<id>_<volume>`, the network `<id>`, files in
+  `/data/supa-runner/stacks/<id>` (`.env` mode 600). These are the names Coolify used, so the
+  registry's `coolify_service_uuid` is the stack id either way.
+- **The shared network** (`coolify`) is not in the stack's compose file: compose would give every
+  container its short service name there, and every project's `supabase-db` would answer to the same
+  name. The runner creates the containers, attaches each under its full name, then starts them.
+- **Taking over a stack Coolify made**, in place: `docker run -i <runner image> adopt <ref> <uuid>`
+  with the six secrets on stdin (other keys are ignored and named). The containers are recreated
+  from the template under the same names, on the same volumes; the database restarts once.
+  `apps/control-plane/test/runner-takeover.sh` checks this on a real Docker host (a row survives,
+  only full names on the shared network, restart and delete through the API).
