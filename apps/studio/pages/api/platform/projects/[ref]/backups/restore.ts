@@ -4,8 +4,9 @@ import { apiWrapper } from '@/lib/api/apiWrapper'
 import { handleProjectBackups } from '@/lib/api/self-hosted/project-backups'
 
 /**
- * Fork: restores one backup into a new project next to this one (deploy/platform/SPEC.md §19).
- * Body: `{ snapshot_id, name }`. This project is never written to.
+ * Fork: restores one backup into a new project next to this one (deploy/platform/SPEC.md §19),
+ * or the database as it was at a moment (§22). Body: `{ snapshot_id, name }` or
+ * `{ target_time, name }`. This project is never written to.
  */
 const restoreBackup = (req: NextApiRequest, res: NextApiResponse) => apiWrapper(req, res, handler)
 export default restoreBackup

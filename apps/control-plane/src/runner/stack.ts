@@ -100,10 +100,7 @@ export function buildStack(rendered: string, id: string): StackFiles {
   const topVolumes = doc.get('volumes')
   if (isMap(topVolumes)) {
     const names = topVolumes.items.map((p) => String(p.key))
-    doc.set(
-      'volumes',
-      Object.fromEntries(names.map((n) => [volumeKey(n), { name: volumeKey(n) }]))
-    )
+    doc.set('volumes', Object.fromEntries(names.map((n) => [volumeKey(n), { name: volumeKey(n) }])))
   }
   doc.set('networks', { [id]: { name: id, external: true } })
 
@@ -114,8 +111,10 @@ export function buildStack(rendered: string, id: string): StackFiles {
 export function stackEnvFile(envs: Record<string, string>): string {
   const lines: string[] = []
   for (const [key, value] of Object.entries(envs)) {
-    if (!(STACK_ENV_KEYS as readonly string[]).includes(key)) throw new StackInputError(`Unknown stack variable ${key}`)
-    if (!STACK_ENV_VALUE.test(value)) throw new StackInputError(`Stack variable ${key} has unsafe characters`)
+    if (!(STACK_ENV_KEYS as readonly string[]).includes(key))
+      throw new StackInputError(`Unknown stack variable ${key}`)
+    if (!STACK_ENV_VALUE.test(value))
+      throw new StackInputError(`Stack variable ${key} has unsafe characters`)
     lines.push(`${key}=${value}`)
   }
   return lines.join('\n') + '\n'

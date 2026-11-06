@@ -5,7 +5,9 @@ import pg from 'pg'
 
 import { createPgRegistry } from '../registry.ts'
 import { parseSecretsKey } from '../secrets.ts'
+import type { BaseBackup } from '../runner/walg.ts'
 import { exec } from './exec.ts'
+import type { PitrRunner } from './pitr.ts'
 import { BackupService, type ConfigSource, type ControlPlaneClient } from './service.ts'
 import { createRunStore, migrateRuns } from './state.ts'
 
@@ -104,6 +106,53 @@ const controlPlane: ControlPlaneClient = {
   },
 }
 
+/** The runner's PITR calls (src/runner/server.ts). Bodies carry wal-g's keys: never logged. */
+async function runner<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T | null> {
+  const res = await fetch(`${config.runnerUrl}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${config.runnerToken}`,
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    const error = (() => {
+      try {
+        return String((JSON.parse(text) as { error?: string }).error ?? '')
+      } catch {
+        return ''
+      }
+    })()
+    throw new Error(`Runner ${method} ${path.replace(/^\/stacks\/[^/]+/, '/stacks/…')} -> ${res.status} ${error}`.trim())
+  }
+  return (text ? JSON.parse(text) : null) as T
+}
+
+const stackPath = (id: string) => `/stacks/${encodeURIComponent(id)}`
+const pitr: PitrRunner | undefined =
+  config.stackBackend === 'runner'
+    ? {
+        async configure(id, settings) {
+          await runner('PUT', `${stackPath(id)}/wal-g`, { settings })
+        },
+        async backup(id, keepFull) {
+          return (await runner<{ backups: BaseBackup[] }>('POST', `${stackPath(id)}/wal-g/backup`, { keep_full: keepFull }, 3 * 60 * 60_000))!.backups
+        },
+        async backups(id) {
+          return (await runner<{ backups: BaseBackup[] }>('GET', `${stackPath(id)}/wal-g/backups`))!.backups
+        },
+        async startScratch(id, backup, targetTime) {
+          return (await runner<{ host: string }>('POST', `${stackPath(id)}/pitr-scratch`, { backup, target_time: targetTime }, 2 * 60 * 60_000))!.host
+        },
+        async dropScratch(id) {
+          await runner('DELETE', `${stackPath(id)}/pitr-scratch`)
+        },
+      }
+    : undefined
+
 const pool = new pg.Pool({ connectionString: config.registryDatabaseUrl, max: 3 })
 await migrateRuns(pool)
 const runs = createRunStore(pool)
@@ -155,6 +204,7 @@ const service = new BackupService({
     }
     throw new Error('The new project did not come back after its restart')
   },
+  pitr,
   apiToken: config.apiToken,
   log,
 })

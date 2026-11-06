@@ -171,3 +171,52 @@ describe('restic arguments', () => {
     ).toBe('s3:https://x/b/ref')
   })
 })
+
+describe('point-in-time recovery settings', () => {
+  const PITR = `
+destinations:
+  r2-main: { type: s3, endpoint: "https://acc.r2.example.com", bucket: platform-backups, prefix: supa, access_key_id: AKID, secret_access_key: SECRET }
+default: { destination: r2-main }
+pitr: { prefix: /supa-pitr/ }
+projects:
+  projectb: { pitr: true }
+  other: {}
+encryption_key: 0123456789abcdef0123456789abcdef
+`
+  const ref = 'abcdefghijabcdefghij'
+
+  it('gives the projects that ask for it their own folder and key, apart from restic', () => {
+    const config = parseBackupConfig(PITR)
+    expect(config.pitr).toEqual({ destination: 'r2-main', prefix: 'supa-pitr', keep_full: 7 })
+    const policy = resolvePolicy(config, { ref, name: 'projectb' })
+    expect(policy.pitr).toMatchObject({
+      destinationName: 'r2-main',
+      keepFull: 7,
+      location: { bucket: 'platform-backups', prefix: 'supa-pitr' },
+      settings: {
+        prefix: `s3://platform-backups/supa-pitr/${ref}`,
+        endpoint: 'https://acc.r2.example.com',
+        region: 'auto',
+        access_key_id: 'AKID',
+        secret_access_key: 'SECRET',
+      },
+    })
+    const key = policy.pitr!.settings.libsodium_key
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+    expect(key).not.toBe(policy.password)
+    expect(resolvePolicy(config, { ref: 'zyxwvutsrqzyxwvutsrq', name: 'projectb' }).pitr!.settings.libsodium_key).not.toBe(key)
+    expect(resolvePolicy(config, { ref, name: 'other' }).pitr).toBeNull()
+    expect(resolvePolicy(parseBackupConfig(YAML), { ref, name: 'projectb' }).pitr).toBeNull()
+  })
+
+  it("refuses a folder inside restic's, or restic's inside it, and a project flag without the block", () => {
+    for (const prefix of ['supa', 'supa/pitr', ''])
+      expect(() => parseBackupConfig(PITR.replace('/supa-pitr/', prefix === '' ? '""' : prefix))).toThrow(/pitr.prefix/)
+    expect(() => parseBackupConfig(PITR.replace('prefix: supa,', 'prefix: supa/inner,').replace('/supa-pitr/', 'supa'))).toThrow(
+      /pitr.prefix/
+    )
+    expect(() => parseBackupConfig(PITR.replace('pitr: { prefix: /supa-pitr/ }', ''))).toThrow(/projects.projectb.pitr needs the pitr block/)
+    expect(() => parseBackupConfig(PITR.replace('{ pitr: true }', '{ pitr: "yes" }'))).toThrow(/projects.projectb.pitr must be true or false/)
+    expect(() => parseBackupConfig(PITR.replace('/supa-pitr/ }', '/supa-pitr/, keep_full: 0 }'))).toThrow(/keep_full/)
+  })
+})

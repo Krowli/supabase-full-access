@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto'
-import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import {
@@ -24,6 +24,25 @@ export interface Docker {
   attach(container: string, network: string, alias: string): Promise<void>
   /** Whether any container carries the compose project label <id> (a stack Coolify made). */
   projectHasContainers(id: string): Promise<boolean>
+  /** `docker exec [-i] -u <user> <container> <args>`, `input` on stdin; returns stdout. */
+  exec(
+    container: string,
+    user: string,
+    args: string[],
+    input?: string,
+    timeoutMs?: number
+  ): Promise<string>
+  /** `docker kill --signal <signal> <container>`. */
+  signal(container: string, signal: string): Promise<void>
+  /** The image the container runs. */
+  imageOf(container: string): Promise<string>
+  /** `docker run -d <args>`: a one-off container (src/runner/pitr.ts). */
+  run(args: string[]): Promise<void>
+  /** Removes the container and the volumes, those of them that exist. */
+  remove(container: string, volumes: string[]): Promise<void>
+  running(container: string): Promise<boolean>
+  /** The last lines of the container's output. */
+  logs(container: string, lines: number): Promise<string>
 }
 
 export type StackMeta = { id: string; ref: string; name: string }
@@ -39,8 +58,15 @@ export type StacksConfig = {
   docker: Docker
 }
 
+const exists = (path: string) =>
+  stat(path).then(
+    () => true,
+    () => false
+  )
+
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
-const newId = () => Array.from({ length: 24 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('')
+const newId = () =>
+  Array.from({ length: 24 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('')
 
 type PsLine = { Service?: string; State?: string; Health?: string }
 
@@ -59,7 +85,8 @@ export function stackStatus(psJsonLines: string): string {
     })
   if (!rows.length || !rows.some((r) => r.State === 'running')) return 'exited'
   if (rows.some((r) => r.Health === 'starting')) return 'starting:unhealthy'
-  if (rows.every((r) => r.State === 'running' && (!r.Health || r.Health === 'healthy'))) return 'running:healthy'
+  if (rows.every((r) => r.State === 'running' && (!r.Health || r.Health === 'healthy')))
+    return 'running:healthy'
   return 'running:unhealthy'
 }
 
@@ -131,10 +158,23 @@ export class Stacks {
     return id
   }
 
+  async has(id: string): Promise<boolean> {
+    return (await this.meta(id)) !== null
+  }
+
   async get(id: string): Promise<StackState | null> {
     const meta = await this.meta(id)
     if (!meta) return null
-    const ps = await this.config.docker.compose(id, this.stackDir(id), ['ps', '-a', '--format', 'json'])
+    // A stack registered but not started yet has no compose.yaml, and compose refuses to run
+    // without one: nothing of it runs.
+    if (!(await exists(join(this.stackDir(id), 'compose.yaml'))))
+      return { ...meta, status: 'exited' }
+    const ps = await this.config.docker.compose(id, this.stackDir(id), [
+      'ps',
+      '-a',
+      '--format',
+      'json',
+    ])
     return { ...meta, status: stackStatus(ps) }
   }
 
@@ -212,9 +252,12 @@ export class Stacks {
   async delete(id: string): Promise<void> {
     const meta = await this.must(id)
     await this.writeFiles(meta)
-    await this.config.docker.compose(id, this.stackDir(id), ['down', '--volumes', '--remove-orphans'])
+    await this.config.docker.compose(id, this.stackDir(id), [
+      'down',
+      '--volumes',
+      '--remove-orphans',
+    ])
     await this.config.docker.removeNetwork(id)
     await rm(this.stackDir(id), { recursive: true, force: true })
   }
 }
-

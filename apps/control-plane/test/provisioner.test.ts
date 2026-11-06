@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { ConflictError, NotFoundError, Provisioner } from '../src/provisioner.ts'
 import { generateProjectSecrets } from '../src/secrets.ts'
+import { noTenants } from '../src/tenants.ts'
 import { fakeShared, FakeCoolify, MemoryRegistry } from './fakes.ts'
 
 let registry: MemoryRegistry
@@ -54,6 +55,25 @@ describe('create', () => {
 
     const order = coolify.calls.filter((c) => !['getService', 'findServiceByName'].includes(c))
     expect(order).toEqual(['createService', 'connectToDockerNetwork', 'setEnvs', 'start'])
+  })
+
+  it('creates and deletes a project on a platform without Realtime (REALTIME_ENABLED=false)', async () => {
+    provisioner = new Provisioner({
+      registry,
+      coolify,
+      ...shared,
+      realtime: noTenants,
+      renderCompose: (ref) => `compose for ${ref}`,
+      serviceEnvs: (s) => ({ PROJECT_DB_PASSWORD: s.db_password }),
+      healthTimeoutMs: 60_000,
+      pollIntervalMs: 0,
+      sleep: async () => {},
+    })
+    const p = await createAndWait()
+    expect(p.status).toBe('ACTIVE_HEALTHY')
+    expect(shared.pooler.tenants.has(p.ref)).toBe(true)
+    await provisioner.delete(p.ref)
+    expect(await registry.get(p.ref)).toBeNull()
   })
 
   it('registers the project in MinIO, Supavisor, Realtime and Kong', async () => {

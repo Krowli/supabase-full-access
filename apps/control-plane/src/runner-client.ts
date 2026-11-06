@@ -20,7 +20,12 @@ export function createRunnerClient(config: RunnerConfig): Coolify {
   const base = config.url.replace(/\/+$/, '')
 
   // Bodies carry secrets (envs): never logged. Start and restart pull images: up to 10 minutes.
-  async function call<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T | null> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs = 60_000
+  ): Promise<T | null> {
     const res = await fetch(`${base}${path}`, {
       method,
       headers: {
@@ -34,7 +39,10 @@ export function createRunnerClient(config: RunnerConfig): Coolify {
     if (res.status === 404) return null
     if (!res.ok) {
       const text = (await res.text()).slice(0, 300)
-      throw new RunnerError(`Runner ${method} ${path.split('?')[0]} -> ${res.status}: ${text}`, res.status)
+      throw new RunnerError(
+        `Runner ${method} ${path.split('?')[0]} -> ${res.status}: ${text}`,
+        res.status
+      )
     }
     const text = await res.text()
     return (text ? JSON.parse(text) : null) as T
@@ -44,7 +52,9 @@ export function createRunnerClient(config: RunnerConfig): Coolify {
 
   return {
     async findServiceByName(name) {
-      return (await call<{ id: string }>('GET', `/stacks?ref=${encodeURIComponent(name)}`))?.id ?? null
+      return (
+        (await call<{ id: string }>('GET', `/stacks?ref=${encodeURIComponent(name)}`))?.id ?? null
+      )
     },
     async createService(name, description) {
       const res = await call<{ id: string }>('POST', '/stacks', { ref: name, name: description })

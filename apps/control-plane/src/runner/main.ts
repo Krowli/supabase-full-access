@@ -10,6 +10,7 @@ import { resolve } from 'node:path'
 
 import { loadTemplate, renderTemplate, templateValues } from '../template.ts'
 import { createDocker } from './docker.ts'
+import { Pitr } from './pitr.ts'
 import { createRunnerServer } from './server.ts'
 import { buildStack, STACK_ENV_KEYS } from './stack.ts'
 import { Stacks } from './stacks.ts'
@@ -32,16 +33,20 @@ const token = command === 'serve' ? req('RUNNER_TOKEN') : ''
 if (missing.length) throw new Error(`Missing env: ${missing.join(', ')}`)
 
 const template = loadTemplate(
-  env.PROJECT_TEMPLATE_PATH ?? resolve(import.meta.dirname, '../../../../deploy/platform/project-compose.yaml')
+  env.PROJECT_TEMPLATE_PATH ??
+    resolve(import.meta.dirname, '../../../../deploy/platform/project-compose.yaml')
 )
-const render = (r: string) => renderTemplate(template, templateValues(r, domainSuffix, shared, projectsHostDir))
+const render = (r: string) =>
+  renderTemplate(template, templateValues(r, domainSuffix, shared, projectsHostDir))
 const log = (event: string, fields: Record<string, unknown>) =>
   console.log(JSON.stringify({ time: new Date().toISOString(), event, ...fields }))
+const docker = createDocker()
+const sharedNetwork = env.RUNNER_SHARED_NETWORK ?? 'coolify'
 const stacks = new Stacks({
   dir: env.RUNNER_STACKS_DIR ?? '/data/supa-runner/stacks',
-  sharedNetwork: env.RUNNER_SHARED_NETWORK ?? 'coolify',
+  sharedNetwork,
   render,
-  docker: createDocker(),
+  docker,
 })
 
 if (command === 'render') {
@@ -55,7 +60,8 @@ if (command === 'render') {
     const at = line.indexOf('=')
     if (at <= 0 || line.startsWith('#')) continue
     const key = line.slice(0, at)
-    if ((STACK_ENV_KEYS as readonly string[]).includes(key)) envs[key] = line.slice(at + 1).replace(/^'(.*)'$|^"(.*)"$/, '$1$2')
+    if ((STACK_ENV_KEYS as readonly string[]).includes(key))
+      envs[key] = line.slice(at + 1).replace(/^'(.*)'$|^"(.*)"$/, '$1$2')
     else ignored.push(key)
   }
   const got = await stacks.create(ref, ref, id)
@@ -65,10 +71,16 @@ if (command === 'render') {
   const state = await stacks.get(got)
   log('stack.status', { id: got, status: state?.status })
 } else if (command === 'serve') {
-  const server = createRunnerServer({ stacks, token, log })
+  const server = createRunnerServer({
+    stacks,
+    pitr: new Pitr({ stacks, docker, sharedNetwork }),
+    token,
+    log,
+  })
   const port = Number(env.RUNNER_PORT ?? 8080)
   server.listen(port, () => log('runner.listening', { port }))
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => server.close(() => process.exit(0)))
+  for (const signal of ['SIGTERM', 'SIGINT'] as const)
+    process.on(signal, () => server.close(() => process.exit(0)))
 } else {
   throw new Error(`Unknown command ${command}`)
 }

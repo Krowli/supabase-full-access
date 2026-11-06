@@ -13,6 +13,7 @@ import {
   usePlatformBackupsQuery,
   type PlatformBackupRun,
   type PlatformBackupSnapshot,
+  type PlatformPitr,
 } from '@/data/platform-backups/platform-backups'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 
@@ -20,11 +21,18 @@ import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
  * Fork: Database → Backups on a multi-project Studio (deploy/platform/SPEC.md §19). The platform's
  * backup service copies the project every night (database, Storage files, settings) to the place
  * the infra repository names for it. Here: where and when, what happened lately, the backups, "Back
- * up now", and restoring a backup into a new project next to this one. No keys are shown or set
- * here; they live in the infra repository.
+ * up now", and restoring a backup into a new project next to this one. With point-in-time recovery
+ * on for the project (SPEC §22), also restoring the database as it was at any moment of its window.
+ * No keys are shown or set here; they live in the infra repository.
  */
 
 const formatTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '')
+
+/** A Date as the value of an `<input type="datetime-local">`: local time, to the second. */
+const toLocalInput = (d: Date) => {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
 
 export const formatBytes = (n: number | null) => {
   if (n === null) return ''
@@ -56,6 +64,7 @@ export const PlatformBackups = () => {
   const { data, error, isPending, isError } = usePlatformBackupsQuery(ref)
   const { mutate: runBackup, isPending: isStarting } = usePlatformBackupRunMutation(ref)
   const [selected, setSelected] = useState<PlatformBackupSnapshot | null>(null)
+  const [pointInTime, setPointInTime] = useState(false)
 
   if (isPending) return <GenericSkeletonLoader />
   if (isError) return <AlertError error={error} subject="Failed to retrieve backups" />
@@ -117,6 +126,50 @@ export const PlatformBackups = () => {
         </>
       )}
 
+      {data.pitr && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-sm text-foreground">Point in time</h3>
+          {data.pitr.waiting_for_restart ? (
+            <Admonition
+              type="note"
+              title="Starts at the database's next restart"
+              description="Point-in-time recovery is set up for this project. Its changes are archived from the next restart of its database on."
+            />
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-md border p-4">
+              <div className="flex flex-col gap-1 text-sm">
+                {data.pitr.earliest ? (
+                  <p className="text-foreground">
+                    Restore the database as it was at any moment from {formatTime(data.pitr.earliest)}{' '}
+                    to {data.pitr.failing ? formatTime(data.pitr.latest) : 'now'}
+                  </p>
+                ) : (
+                  <p className="text-foreground">The first base backup is on its way</p>
+                )}
+                <p className="text-foreground-light">
+                  Changes are archived within a minute; {data.pitr.backups.length} daily base backup
+                  {data.pitr.backups.length === 1 ? '' : 's'} kept.
+                </p>
+                {data.pitr.failing && (
+                  <p className="text-destructive">
+                    Archiving fails; changes after {formatTime(data.pitr.last_archived_at)} cannot be
+                    restored yet.
+                  </p>
+                )}
+                {data.pitr.last_error && <p className="text-destructive">{data.pitr.last_error}</p>}
+              </div>
+              <Button
+                variant="default"
+                disabled={busy || !data.pitr.earliest}
+                onClick={() => setPointInTime(true)}
+              >
+                Restore to a point in time
+              </Button>
+            </div>
+          )}
+        </section>
+      )}
+
       {data.runs.length > 0 && (
         <section className="flex flex-col gap-2">
           <h3 className="text-sm text-foreground">Recent activity</h3>
@@ -124,7 +177,11 @@ export const PlatformBackups = () => {
             {data.runs.slice(0, 8).map((run) => (
               <li key={run.id} className="flex flex-wrap items-center gap-3 px-4 py-2">
                 <StatusBadge status={run.status} />
-                <span className="text-foreground">{RUN_LABEL[run.kind]}</span>
+                <span className="text-foreground">
+                  {run.kind === 'restore' && run.snapshot_id?.startsWith('base_')
+                    ? 'Point-in-time restore'
+                    : RUN_LABEL[run.kind]}
+                </span>
                 <span className="text-foreground-light">{formatTime(run.started_at ?? run.created_at)}</span>
                 {run.kind === 'restore' && run.target_ref && (
                   <Link className="text-brand hover:underline" href={`/project/${run.target_ref}`}>
@@ -173,7 +230,91 @@ export const PlatformBackups = () => {
           onClose={() => setSelected(null)}
         />
       )}
+      {pointInTime && project && data.pitr?.earliest && (
+        <PointInTimeDialog
+          pitr={data.pitr}
+          projectName={project.name}
+          onClose={() => setPointInTime(false)}
+        />
+      )}
     </div>
+  )
+}
+
+const PointInTimeDialog = ({
+  pitr,
+  projectName,
+  onClose,
+}: {
+  pitr: PlatformPitr
+  projectName: string
+  onClose: () => void
+}) => {
+  const { data: project } = useSelectedProjectQuery()
+  const { mutate: restore, isPending } = usePlatformBackupRestoreMutation(project?.ref)
+  const earliest = new Date(pitr.earliest!)
+  const latest = pitr.failing && pitr.latest ? new Date(pitr.latest) : new Date()
+  const [at, setAt] = useState(() =>
+    toLocalInput(new Date(Math.max(earliest.getTime(), latest.getTime() - 10 * 60_000)))
+  )
+  const [name, setName] = useState(`${projectName} (at ${at.slice(0, 16).replace('T', ' ')})`.slice(0, 64))
+  // The input's value is local time; the backup service takes UTC.
+  const moment = new Date(at)
+  const upper = pitr.failing && pitr.latest ? new Date(pitr.latest).getTime() : Date.now()
+  const valid = !Number.isNaN(moment.getTime()) && moment >= earliest && moment.getTime() <= upper
+
+  return (
+    <ConfirmationModal
+      visible
+      size="medium"
+      title="Restore to a point in time"
+      confirmLabel="Create project and restore"
+      loading={isPending}
+      disabled={!valid || !name.trim()}
+      onCancel={() => {
+        if (!isPending) onClose()
+      }}
+      onConfirm={() =>
+        restore(
+          { targetTime: moment.toISOString(), name: name.trim() },
+          {
+            onSuccess: () => {
+              toast.success('Restoring into a new project. It shows up in the project list in a few minutes.')
+              onClose()
+            },
+            onError: (e) => toast.error(`Could not start the restore: ${e.message}`),
+          }
+        )
+      }
+    >
+      <div className="flex flex-col gap-3 text-sm">
+        <p className="text-foreground-light">
+          A new project gets the database of {projectName} as it was at the moment below. Its
+          Storage files and settings are copied as they are now. {projectName} itself is not
+          changed. The new project has its own address and API keys.
+        </p>
+        <label className="flex flex-col gap-1">
+          <span className="text-foreground">Moment (your local time)</span>
+          <Input
+            type="datetime-local"
+            step={1}
+            min={toLocalInput(earliest)}
+            max={toLocalInput(latest)}
+            value={at}
+            onChange={(e) => setAt(e.target.value)}
+          />
+          {!valid && (
+            <span className="text-destructive">
+              Choose a moment from {formatTime(earliest.toISOString())} to {formatTime(latest.toISOString())}
+            </span>
+          )}
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-foreground">Name of the new project</span>
+          <Input value={name} maxLength={64} onChange={(e) => setName(e.target.value)} />
+        </label>
+      </div>
+    </ConfirmationModal>
   )
 }
 

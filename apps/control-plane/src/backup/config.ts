@@ -14,6 +14,12 @@
 //                          # (derivePassword) unless the project sets its own `password`
 //   deleted_project_retention_days: 30   # a deleted project's backups are removed this long after
 //                                        # its deletion (0: at once)
+//   pitr:                  point-in-time recovery (wal-g, SPEC §22), for the projects that set pitr: true
+//     destination: r2-main # default: default.destination
+//     prefix: pitr         # its own folder: <bucket>/<prefix>/<ref>, never the destination's prefix
+//     keep_full: 7         # base backups kept (one a day): the window to restore in, in days
+//   projects:
+//     projectb: { pitr: true }
 //
 // Each project is one restic repository, <bucket>/<prefix>/<ref>; the platform's own database
 // (the project registry) is the repository `_platform`.
@@ -21,6 +27,8 @@
 import { createHmac } from 'node:crypto'
 
 import { parse as parseYaml } from 'yaml'
+
+import type { WalgSettings } from '../runner/walg.ts'
 
 export type Keep = { daily: number; weekly: number; monthly: number }
 
@@ -42,7 +50,10 @@ export type ProjectEntry = {
   keep?: Partial<Keep>
   password?: string
   enabled?: boolean
+  pitr?: boolean
 }
+
+export type PitrConfig = { destination: string; prefix: string; keep_full: number }
 
 export type BackupConfig = {
   destinations: Record<string, Destination>
@@ -50,6 +61,16 @@ export type BackupConfig = {
   projects: Record<string, ProjectEntry>
   encryption_key: string
   deleted_project_retention_days: number
+  pitr: PitrConfig | null
+}
+
+/** Point-in-time recovery of one project: where its WAL goes and what the runner writes for wal-g. */
+export type PitrPolicy = {
+  destinationName: string
+  /** The destination with the PITR prefix: removeRepository(location, ref) removes the project's folder. */
+  location: Destination
+  settings: WalgSettings
+  keepFull: number
 }
 
 export type Policy = {
@@ -60,6 +81,7 @@ export type Policy = {
   keep: Keep
   password: string
   repository: string
+  pitr: PitrPolicy | null
 }
 
 /** The repository id of the platform's own database. */
@@ -188,15 +210,36 @@ export function parseBackupConfig(raw: string): BackupConfig {
       const password = str(e, 'password', path, false)
       if (password !== undefined && password.length < 16) fail(`${path}.password`, 'must be at least 16 characters')
       if (e.enabled !== undefined && typeof e.enabled !== 'boolean') fail(`${path}.enabled`, 'must be true or false')
+      if (e.pitr !== undefined && typeof e.pitr !== 'boolean') fail(`${path}.pitr`, 'must be true or false')
       projects[name] = {
         ...(dest ? { destination: dest } : {}),
         ...(e.schedule !== undefined ? { schedule: schedule(e.schedule, `${path}.schedule`) } : {}),
         ...(e.keep !== undefined ? { keep: keep(e.keep, `${path}.keep`) } : {}),
         ...(password ? { password } : {}),
         ...(e.enabled !== undefined ? { enabled: e.enabled as boolean } : {}),
+        ...(e.pitr !== undefined ? { pitr: e.pitr as boolean } : {}),
       }
     }
   }
+
+  let pitr: PitrConfig | null = null
+  if (doc.pitr !== undefined && doc.pitr !== null) {
+    if (!isObject(doc.pitr)) fail('pitr', 'must be a mapping')
+    const dest = str(doc.pitr, 'destination', 'pitr', false) ?? defaultDestination
+    known(dest, 'pitr.destination')
+    const prefix = str(doc.pitr, 'prefix', 'pitr')!.replace(/^\/+|\/+$/g, '')
+    if (!PREFIX.test(prefix) || prefix.includes('..')) fail('pitr.prefix', 'has invalid characters')
+    const restic = destinations[dest].prefix ?? ''
+    const inside = (a: string, b: string) => a === b || a.startsWith(`${b}/`)
+    if (restic !== '' && (inside(prefix, restic) || inside(restic, prefix)))
+      fail('pitr.prefix', "must be a folder of its own, apart from the destination's prefix (restic's repositories)")
+    const keepFull = doc.pitr.keep_full ?? 7
+    if (typeof keepFull !== 'number' || !Number.isInteger(keepFull) || keepFull < 1 || keepFull > 60)
+      fail('pitr.keep_full', 'must be a whole number from 1 to 60')
+    pitr = { destination: dest, prefix, keep_full: keepFull }
+  }
+  for (const [name, entry] of Object.entries(projects))
+    if (entry.pitr && !pitr) fail(`projects.${name}.pitr`, 'needs the pitr block (prefix) at the top of the file')
 
   return {
     destinations,
@@ -208,12 +251,18 @@ export function parseBackupConfig(raw: string): BackupConfig {
     projects,
     encryption_key,
     deleted_project_retention_days: retention,
+    pitr,
   }
 }
 
 /** A project's own encryption password: one key in the infra file, a different password per project. */
 export function derivePassword(encryptionKey: string, ref: string): string {
   return createHmac('sha256', encryptionKey).update(`restic:${ref}`).digest('hex')
+}
+
+/** The key a project's WAL and base backups are encrypted with: never change it (old backups). */
+export function deriveWalgKey(encryptionKey: string, ref: string): string {
+  return createHmac('sha256', encryptionKey).update(`wal-g:${ref}`).digest('hex')
 }
 
 export function repositoryUrl(d: Destination, id: string): string {
@@ -233,6 +282,24 @@ export function resolvePolicy(config: BackupConfig, project: { ref: string; name
     keep: { ...config.default.keep, ...entry.keep },
     password: entry.password ?? derivePassword(config.encryption_key, project.ref),
     repository: repositoryUrl(destination, project.ref),
+    pitr: config.pitr && entry.pitr ? pitrPolicy(config, config.pitr, project.ref) : null,
+  }
+}
+
+function pitrPolicy(config: BackupConfig, pitr: PitrConfig, ref: string): PitrPolicy {
+  const d = config.destinations[pitr.destination]
+  return {
+    destinationName: pitr.destination,
+    location: { ...d, prefix: pitr.prefix },
+    settings: {
+      prefix: `s3://${[d.bucket, pitr.prefix, ref].join('/')}`,
+      endpoint: d.endpoint,
+      region: d.region ?? 'auto',
+      access_key_id: d.access_key_id,
+      secret_access_key: d.secret_access_key,
+      libsodium_key: deriveWalgKey(config.encryption_key, ref),
+    },
+    keepFull: pitr.keep_full,
   }
 }
 

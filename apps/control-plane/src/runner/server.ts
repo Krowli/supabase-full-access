@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
+import type { Pitr } from './pitr.ts'
 import { StackInputError, StackNotFoundError, type Stacks } from './stacks.ts'
 
 /**
@@ -14,8 +15,22 @@ import { StackInputError, StackNotFoundError, type Stacks } from './stacks.ts'
  *   PUT    /stacks/<id>/envs {envs}   only the project secrets the template reads
  *   POST   /stacks/<id>/start | /update | /restart
  *   DELETE /stacks/<id>               containers, volumes, network and files
+ *
+ * Point-in-time recovery of the stack's database (src/runner/pitr.ts), for the backup service:
+ *
+ *   PUT    /stacks/<id>/wal-g {settings}            wal-g's files in the config volume, then a reload
+ *   DELETE /stacks/<id>/wal-g                       PITR off (archiving stops fully at the next restart)
+ *   POST   /stacks/<id>/wal-g/backup {keep_full}    a base backup; {"backups"}
+ *   GET    /stacks/<id>/wal-g/backups               {"backups"}, oldest first
+ *   POST   /stacks/<id>/pitr-scratch {backup, target_time}   a read-only copy at that moment; {"host"}
+ *   DELETE /stacks/<id>/pitr-scratch                the copy and its volume
  */
-export type RunnerServerDeps = { stacks: Stacks; token: string; log?: (event: string, fields: Record<string, unknown>) => void }
+export type RunnerServerDeps = {
+  stacks: Stacks
+  pitr: Pitr
+  token: string
+  log?: (event: string, fields: Record<string, unknown>) => void
+}
 
 class HttpError extends Error {
   status: number
@@ -55,10 +70,11 @@ function authorized(req: IncomingMessage, token: string): boolean {
   return given.length === expected.length && timingSafeEqual(given, expected)
 }
 
-const STACK_PATH = /^\/stacks\/([a-z0-9]{24})(?:\/(envs|start|update|restart))?$/
+const STACK_PATH =
+  /^\/stacks\/([a-z0-9]{24})(?:\/(envs|start|update|restart|wal-g|wal-g\/backup|wal-g\/backups|pitr-scratch))?$/
 
 export function createRunnerServer(deps: RunnerServerDeps): Server {
-  const { stacks, token } = deps
+  const { stacks, pitr, token } = deps
   const log = deps.log ?? (() => {})
   if (token.length < 32) throw new Error('RUNNER_TOKEN must be at least 32 characters')
 
@@ -89,6 +105,7 @@ export function createRunnerServer(deps: RunnerServerDeps): Server {
           return state ? send(res, 200, state) : send(res, 404, { error: 'No such stack' })
         }
         if (!action && req.method === 'DELETE') {
+          await pitr.dropScratch(id)
           await stacks.delete(id)
           log('stack.deleted', { id })
           return send(res, 204)
@@ -97,13 +114,52 @@ export function createRunnerServer(deps: RunnerServerDeps): Server {
           const { envs } = await readJson(req)
           if (typeof envs !== 'object' || envs === null || Array.isArray(envs))
             throw new HttpError(400, 'envs must be an object')
-          await stacks.setEnvs(id, Object.fromEntries(Object.entries(envs).map(([k, v]) => [k, String(v)])))
+          await stacks.setEnvs(
+            id,
+            Object.fromEntries(Object.entries(envs).map(([k, v]) => [k, String(v)]))
+          )
           log('stack.envs_set', { id, keys: Object.keys(envs) })
           return send(res, 204)
         }
-        if (action && action !== 'envs' && req.method === 'POST') {
-          await stacks[action as 'start' | 'update' | 'restart'](id)
+        if (
+          (action === 'start' || action === 'update' || action === 'restart') &&
+          req.method === 'POST'
+        ) {
+          await stacks[action](id)
           log(`stack.${action}`, { id })
+          return send(res, 204)
+        }
+        // Bodies hold wal-g's keys: never logged.
+        if (action === 'wal-g' && req.method === 'PUT') {
+          await pitr.configure(id, (await readJson(req)).settings)
+          log('pitr.configured', { id })
+          return send(res, 204)
+        }
+        if (action === 'wal-g' && req.method === 'DELETE') {
+          await pitr.disable(id)
+          log('pitr.disabled', { id })
+          return send(res, 204)
+        }
+        if (action === 'wal-g/backup' && req.method === 'POST') {
+          const backups = await pitr.backup(id, Number((await readJson(req)).keep_full))
+          log('pitr.backup_pushed', { id, backups: backups.length })
+          return send(res, 200, { backups })
+        }
+        if (action === 'wal-g/backups' && req.method === 'GET')
+          return send(res, 200, { backups: await pitr.backups(id) })
+        if (action === 'pitr-scratch' && req.method === 'POST') {
+          const body = await readJson(req)
+          const host = await pitr.startScratch(
+            id,
+            String(body.backup ?? ''),
+            String(body.target_time ?? '')
+          )
+          log('pitr.scratch_ready', { id, target_time: body.target_time })
+          return send(res, 200, { host })
+        }
+        if (action === 'pitr-scratch' && req.method === 'DELETE') {
+          await pitr.dropScratch(id)
+          log('pitr.scratch_removed', { id })
           return send(res, 204)
         }
       }
