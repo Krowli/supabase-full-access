@@ -160,7 +160,7 @@ These already have local routes. Each one only has to honour `ref`.
 | LATER | GET, PATCH /platform/projects/{ref}/config/{storage,postgrest,realtime,pgbouncer}; /storage/{ref}/credentials | `data/config/project-storage-config-query.ts:21`, `project-postgrest-config-query.ts:34`, `data/realtime/realtime-config-query.ts:36` | `StorageConfigResponse_Output`, `GetPostgrestConfigResponse_Output`, `RealtimeConfigResponse_Output` | fork stage 2 |
 | LATER | GET or POST /platform/projects/{ref}/analytics/endpoints/{logs.all, usage.api-counts, service-health} | `data/logs/execute-analytics-sql.ts:55,67`; `analytics/project-log-stats-query.ts:39` | `AnalyticsResponse_Output` {result[], error?} | `analytics/endpoints/[name].ts` |
 | LATER | GET /platform/projects/{ref}/api/rest; POST /api-keys/temporary; GET /run-lints; GET /content | `docs/project-json-schema-query.ts:79`, `temp-api-keys-query.ts:16`, `lint-query.ts:21`, `content-query.ts:60` | | local |
-| LATER | /v1/projects/{ref}/functions/** (edge functions) | | | local, one folder |
+| LATER | /v1/projects/{ref}/functions/** (edge functions) | | | local, one folder; the platform runs functions since §23, deployed through the control plane |
 | SKIP | /projects/{ref}/billing/addons, /disk, /infra-monitoring, /daily-stats, /load-balancers, /databases-statuses, /read-replicas/*, /service-versions, /wake, /db-password, /config/secrets | | | |
 
 ### 2.3 Create and lifecycle
@@ -1687,7 +1687,8 @@ A project's database can be restored as it was at any moment of the last `keep_f
 default), not only at last night's backup. Off unless the backup configuration turns it on for a
 project; needs `STACK_BACKEND=runner` (§21). The nightly restic backups (§19) stay as they are.
 
-- **How.** wal-g, which the project image (`supabase/postgres`) ships. The image's `postgresql.conf`
+- **How.** wal-g, which the Postgres 15 project image (`supabase/postgres`) ships and the platform's
+  Postgres 17 image adds (§23). The image's `postgresql.conf`
   includes `/etc/postgresql-custom/wal-g.conf`, a file of the project's own config volume
   (`<id>_supabase-db-config`): the runner writes the archive settings there (`archive_mode = on`,
   `archive_command = wal-g wal-push`, `archive_timeout = 60`, so at most a minute is lost) and
@@ -1729,3 +1730,52 @@ project; needs `STACK_BACKEND=runner` (§21). The nightly restic backups (§19) 
 - **Checked live** by `apps/control-plane/test/pitr-live.sh` on the platform's server, with
   projects of its own: rows deleted after a moment are back in the project restored at it, and a
   broken archive makes `/health` 503.
+
+## 23. Postgres 17 and Edge Functions (2026-11)
+
+Both need `STACK_BACKEND=runner` (§21).
+
+**Postgres major per project.**
+- A project is made on Postgres 15 or 17 and keeps that major for life: its data directory is that
+  major's, and a 15 image does not start on 17 data (nor the other way). The registry has
+  `postgres_version`; the runner's `meta.json` has `postgres: "17"` (absent: 15).
+- The template's database image stays 15's (`supabase/postgres:15.8.1.085`). The runner gives a 17
+  stack its own 17 image instead (`PROJECT_POSTGRES17_IMAGE`; `src/runner/stack.ts`). Without that
+  image the runner refuses to make a 17 stack and refuses to start one: it never falls back to 15.
+- `POST /projects {name, postgres_version?}`; without it, `NEW_PROJECT_POSTGRES_VERSION` (default
+  15). A restore (restic or at a moment) makes the new project on the source's major, since the dump
+  is that major's.
+- **The 17 image** (`deploy/platform/postgres17/Dockerfile`): Supabase's `supabase/postgres:17.6.1.136`
+  plus wal-g, which that image does not have (checked 2026-11-06; the 15 image ships wal-g 3.0.5).
+  wal-g is built from its release tag, static, with libsodium. Checked in the plain 17 image: the
+  template's init scripts run, the extensions are there (pg_cron, pg_net, pgsodium, supabase_vault,
+  pgmq, hypopg, index_advisor, pg_stat_statements, pgcrypto, uuid-ossp, pg_graphql, http, vector),
+  `pgsodium_root.key` is at the same path and 127.0.0.1 is trusted (wal-g connects there). The
+  postgres user is uid 100 in 17 and 105 in 15: nothing here writes files by uid.
+- Upgrading a 15 project to 17 is a restore of its backup into a new project made on 17 (not done
+  automatically: a restore keeps the major).
+
+**Edge Functions per project.**
+- The template's `supabase-functions` service (`supabase/edge-runtime`, the image and command of
+  upstream's self-hosted `functions` service) runs only in the stacks of projects that deployed
+  functions (`x-platform-only-with: functions`).
+- The router is upstream's (`docker/volumes/functions/main`) with the changes listed at its top
+  (`deploy/platform/functions-main`): the functions live in a read-only folder of their own,
+  `verify_jwt` is per function (`.platform.json`, written from the deploy; a function not listed
+  verifies, as on the platform), and the functions get the project's `SUPABASE_URL` (its public
+  URL), `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` and the secrets, not the
+  router's `JWT_SECRET`.
+- **Deploy**, on the control plane (`src/server.ts`) and through it the runner (`src/runner/functions.ts`):
+  - `PUT /projects/<ref>/functions {files: {"<name>/index.ts": "…", "_shared/x.ts": "…"}, verify_jwt:
+    {"<name>": false}}`: all the functions at once, 2 MB at most; one left out is removed. The
+    first deploy routes `/functions/v1/` on the project host to them (Kong, no key-auth: the router
+    checks the JWT; CORS is the function's, as on the platform; 150 s per request).
+  - `PUT /projects/<ref>/functions/secrets {secrets}`: all of them, kept in the stack's
+    `functions.env` (mode 600); names starting `SUPABASE_` are refused, as on the platform.
+  - `GET /projects/<ref>/functions`: the functions, verify_jwt and the secrets' names.
+  - `DELETE /projects/<ref>/functions`: the route, the container, the code and the secrets go.
+- **Not in backups.** The functions' code is in the app's repository and their secrets with the
+  operator: a restore makes a project without functions; deploy them again.
+- **Not yet:** Studio's Edge Functions page (it still needs `EDGE_FUNCTIONS_MANAGEMENT_FOLDER`, §2),
+  `supabase functions deploy` from the CLI (the Management API), and the functions' logs in Studio.
+
