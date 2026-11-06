@@ -23,7 +23,11 @@ export async function forwardBackupRequest(
   const url = request.action === 'view' ? base : `${base}/${request.action === 'run' ? 'backups' : 'restore'}`
   const body =
     request.action === 'restore'
-      ? JSON.stringify({ snapshot_id: request.body.snapshot_id, name: request.body.name })
+      ? JSON.stringify({
+          snapshot_id: request.body.snapshot_id,
+          target_time: request.body.target_time,
+          name: request.body.name,
+        })
       : undefined
   try {
     const res = await fetch(url, {

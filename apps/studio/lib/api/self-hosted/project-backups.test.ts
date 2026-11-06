@@ -41,6 +41,21 @@ describe('forwardBackupRequest', () => {
     expect(restoreBody).toEqual({ snapshot_id: 'abcdef01', name: 'Copy' })
   })
 
+  it('passes a point-in-time restore on with its moment and name only', async () => {
+    let restoreBody: unknown
+    mswServer.use(
+      http.post(`${BASE}/projects/${REF}/restore`, async ({ request }) => {
+        restoreBody = await request.json()
+        return HttpResponse.json({ id: 3, status: 'queued' }, { status: 202 })
+      })
+    )
+    await forwardBackupRequest(CONFIG, REF, {
+      action: 'restore',
+      body: { target_time: '2026-11-06T13:30:15.329Z', name: 'Copy', extra: 'dropped' },
+    })
+    expect(restoreBody).toEqual({ target_time: '2026-11-06T13:30:15.329Z', name: 'Copy' })
+  })
+
   it('passes the service refusals on as { message }', async () => {
     mswServer.use(
       http.post(`${BASE}/projects/${REF}/backups`, () =>

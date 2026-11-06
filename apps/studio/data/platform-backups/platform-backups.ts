@@ -27,6 +27,21 @@ export type PlatformBackupRun = {
 
 export type PlatformBackupSnapshot = { id: string; time: string; size_bytes: number | null }
 
+/** Point-in-time recovery of the project (SPEC §22); null when it is off for the project. */
+export type PlatformPitr = {
+  archive_mode: 'on' | 'off' | null
+  /** Set up, but archiving starts at the database's next restart. */
+  waiting_for_restart: boolean
+  failing: boolean
+  last_archived_at: string | null
+  /** The window to restore in: from the first base backup to now (or the last archived file). */
+  earliest: string | null
+  latest: string | null
+  backups: { name: string; finish_time: string; compressed_size: number | null }[]
+  last_error: string | null
+  checked_at: string | null
+}
+
 export type PlatformBackups = {
   configured: boolean
   config_error: string | null
@@ -40,6 +55,7 @@ export type PlatformBackups = {
   snapshots: PlatformBackupSnapshot[]
   snapshots_error: string | null
   runs: PlatformBackupRun[]
+  pitr?: PlatformPitr | null
 }
 
 export const platformBackupsKey = (projectRef?: string) => [
@@ -88,11 +104,17 @@ export const usePlatformBackupRunMutation = (projectRef?: string) => {
 
 export const usePlatformBackupRestoreMutation = (projectRef?: string) => {
   const queryClient = useQueryClient()
-  return useMutation<PlatformBackupRun, StudioError, { snapshotId: string; name: string }>({
-    mutationFn: async ({ snapshotId, name }) => {
+  return useMutation<
+    PlatformBackupRun,
+    StudioError,
+    { name: string } & ({ snapshotId: string } | { targetTime: string })
+  >({
+    mutationFn: async (variables) => {
       const response = await fetchPost<PlatformBackupRun>(
         `${API_URL}/platform/projects/${projectRef}/backups/restore`,
-        { snapshot_id: snapshotId, name }
+        'snapshotId' in variables
+          ? { snapshot_id: variables.snapshotId, name: variables.name }
+          : { target_time: variables.targetTime, name: variables.name }
       )
       if (response instanceof StudioError) throw response
       return response

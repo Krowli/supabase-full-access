@@ -47,6 +47,24 @@ const VIEW = {
   ],
 }
 
+const PITR = {
+  archive_mode: 'on',
+  waiting_for_restart: false,
+  failing: false,
+  last_archived_at: new Date(Date.now() - 60_000).toISOString(),
+  earliest: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+  latest: new Date().toISOString(),
+  backups: [{ name: 'base_000000010000000000000003', finish_time: new Date(Date.now() - 2 * 60 * 60_000).toISOString(), compressed_size: 2077006 }],
+  last_error: null,
+  checked_at: new Date().toISOString(),
+}
+
+/** The value an `<input type="datetime-local" step="1">` holds: local time, to the second. */
+const localInput = (d: Date) => {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
 let posts: { path: string; body: unknown }[]
 
 beforeEach(() => {
@@ -94,6 +112,55 @@ describe('PlatformBackups', () => {
         },
       ])
     )
+  })
+
+  it('shows no point-in-time section when it is off for the project', async () => {
+    customRender(<PlatformBackups />)
+    await screen.findByText(/Every day at 02:30 UTC to/)
+    expect(screen.queryByText('Point in time')).toBeNull()
+  })
+
+  it('says point-in-time recovery waits for the database restart', async () => {
+    mswServer.use(
+      http.get(`${API_URL}/platform/projects/:ref/backups`, () =>
+        HttpResponse.json({ ...VIEW, pitr: { ...PITR, archive_mode: 'off', waiting_for_restart: true, earliest: null, latest: null, backups: [] } })
+      )
+    )
+    customRender(<PlatformBackups />)
+    expect(await screen.findByText("Starts at the database's next restart")).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Restore to a point in time' })).toBeNull()
+  })
+
+  it('restores the database as it was at a chosen moment into a new project', async () => {
+    mswServer.use(http.get(`${API_URL}/platform/projects/:ref/backups`, () => HttpResponse.json({ ...VIEW, pitr: PITR })))
+    customRender(<PlatformBackups />)
+    expect(await screen.findByText(/Restore the database as it was at any moment from/)).toBeInTheDocument()
+    expect(screen.getByText(/1 daily base backup kept/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Restore to a point in time' }))
+    const moment = new Date(Date.now() - 30 * 60_000)
+    moment.setMilliseconds(0)
+    fireEvent.change(await screen.findByLabelText('Moment (your local time)'), { target: { value: localInput(moment) } })
+    fireEvent.change(screen.getByLabelText('Name of the new project'), { target: { value: 'Shop at half past' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create project and restore' }))
+    await waitFor(() =>
+      expect(posts).toEqual([
+        {
+          path: `/platform/projects/${REF}/backups/restore`,
+          body: { target_time: moment.toISOString(), name: 'Shop at half past' },
+        },
+      ])
+    )
+  })
+
+  it('refuses a moment before the first base backup', async () => {
+    mswServer.use(http.get(`${API_URL}/platform/projects/:ref/backups`, () => HttpResponse.json({ ...VIEW, pitr: PITR })))
+    customRender(<PlatformBackups />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore to a point in time' }))
+    fireEvent.change(await screen.findByLabelText('Moment (your local time)'), {
+      target: { value: localInput(new Date(Date.now() - 3 * 60 * 60_000)) },
+    })
+    expect(screen.getByText(/Choose a moment from/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create project and restore' })).toBeDisabled()
   })
 
   it('says backups are off when there is no configuration', async () => {
