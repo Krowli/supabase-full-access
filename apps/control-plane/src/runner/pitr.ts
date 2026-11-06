@@ -72,17 +72,26 @@ export class Pitr {
 
   /** A full backup, then only the newest `keepFull` stay (with the WAL they need). */
   async backup(id: string, keepFull: number): Promise<BaseBackup[]> {
-    if (!Number.isInteger(keepFull) || keepFull < 1 || keepFull > 60) throw new StackInputError('keep_full must be 1 to 60')
+    if (!Number.isInteger(keepFull) || keepFull < 1 || keepFull > 60)
+      throw new StackInputError('keep_full must be 1 to 60')
     const db = await this.db(id)
     const { docker } = this.config
     await docker.exec(db, 'postgres', walgArgs('backup-push', PGDATA), undefined, 2 * 60 * 60_000)
-    await docker.exec(db, 'postgres', walgArgs('delete', 'retain', 'FULL', String(keepFull), '--confirm'), undefined, 30 * 60_000)
+    await docker.exec(
+      db,
+      'postgres',
+      walgArgs('delete', 'retain', 'FULL', String(keepFull), '--confirm'),
+      undefined,
+      30 * 60_000
+    )
     return this.backups(id)
   }
 
   async backups(id: string): Promise<BaseBackup[]> {
     const db = await this.db(id)
-    return parseBackupList(await this.config.docker.exec(db, 'postgres', walgArgs('backup-list', '--json', '--detail')))
+    return parseBackupList(
+      await this.config.docker.exec(db, 'postgres', walgArgs('backup-list', '--json', '--detail'))
+    )
   }
 
   /**
@@ -93,24 +102,36 @@ export class Pitr {
    */
   async startScratch(id: string, backupName: string, targetTime: string): Promise<string> {
     if (!BACKUP_NAME.test(backupName)) throw new StackInputError('Invalid backup name')
-    if (!TARGET_TIME.test(targetTime) || Number.isNaN(Date.parse(targetTime))) throw new StackInputError('Invalid target time')
+    if (!TARGET_TIME.test(targetTime) || Number.isNaN(Date.parse(targetTime)))
+      throw new StackInputError('Invalid target time')
     const db = await this.db(id)
     const { docker, sharedNetwork } = this.config
     const name = scratchName(id)
     const image = await docker.imageOf(db)
     await this.dropScratch(id)
     await docker.run([
-      '--name', name,
-      '--label', `supa.pitr=${id}`,
-      '--memory', '1g',
-      '--network', sharedNetwork,
-      '-v', `${scratchVolume(id)}:${PGDATA}`,
-      '-v', `${id}_supabase-db-config:${CONFIG_DIR}:ro`,
-      '-e', `PITR_BACKUP=${backupName}`,
+      '--name',
+      name,
+      '--label',
+      `supa.pitr=${id}`,
+      '--memory',
+      '1g',
+      '--network',
+      sharedNetwork,
+      '-v',
+      `${scratchVolume(id)}:${PGDATA}`,
+      '-v',
+      `${id}_supabase-db-config:${CONFIG_DIR}:ro`,
+      '-e',
+      `PITR_BACKUP=${backupName}`,
       // recovery_target_time takes "2026-11-06 12:19:22.100+00", not ISO 8601's T and Z.
-      '-e', `PITR_TARGET=${targetTime.replace('T', ' ').replace(/Z$/, '+00')}`,
-      '--entrypoint', 'bash',
-      image, '-c', SCRATCH_SCRIPT,
+      '-e',
+      `PITR_TARGET=${targetTime.replace('T', ' ').replace(/Z$/, '+00')}`,
+      '--entrypoint',
+      'bash',
+      image,
+      '-c',
+      SCRATCH_SCRIPT,
     ])
     const sleep = this.config.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
     const deadline = Date.now() + (this.config.scratchTimeoutMs ?? 60 * 60_000)
@@ -122,7 +143,24 @@ export class Pitr {
         throw new Error(`The copy at ${targetTime} stopped: ${logs.slice(-400)}`)
       }
       const state = await docker
-        .exec(name, 'postgres', ['psql', '-h', '127.0.0.1', '-U', 'supabase_admin', '-d', 'postgres', '-At', '-c', READY_SQL], undefined, 30_000)
+        .exec(
+          name,
+          'postgres',
+          [
+            'psql',
+            '-h',
+            '127.0.0.1',
+            '-U',
+            'supabase_admin',
+            '-d',
+            'postgres',
+            '-At',
+            '-c',
+            READY_SQL,
+          ],
+          undefined,
+          30_000
+        )
         .catch(() => '')
       if (state.trim() === 'truepaused') return name
       await sleep(3000)

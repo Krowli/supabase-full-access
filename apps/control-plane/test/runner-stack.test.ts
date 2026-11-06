@@ -47,7 +47,8 @@ describe('buildStack', () => {
 
   it('keeps the shared network out of the compose file and lists the containers to attach to it', () => {
     expect(Object.keys(compose.networks)).toEqual([id])
-    for (const svc of Object.values<{ networks: string[] }>(compose.services)) expect(svc.networks).toEqual([id])
+    for (const svc of Object.values<{ networks: string[] }>(compose.services))
+      expect(svc.networks).toEqual([id])
     expect(stack.containers).toEqual([
       `supabase-db-${id}`,
       `supabase-rest-${id}`,
@@ -64,7 +65,9 @@ describe('buildStack', () => {
     ])
     expect(stack.files[1].content).toContain('ALTER USER authenticator WITH PASSWORD')
     expect(stack.compose).not.toMatch(/content:|exclude_from_hc/)
-    const binds = compose.services['supabase-db'].volumes.filter((v: unknown) => typeof v === 'object')
+    const binds = compose.services['supabase-db'].volumes.filter(
+      (v: unknown) => typeof v === 'object'
+    )
     expect(binds.map((b: { source: string }) => b.source)).toEqual([
       './volumes/db/webhooks.sql',
       './volumes/db/roles.sql',

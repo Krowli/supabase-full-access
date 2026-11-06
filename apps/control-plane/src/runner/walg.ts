@@ -44,7 +44,8 @@ export function checkSettings(input: unknown): WalgSettings {
   const s = (input ?? {}) as Record<string, unknown>
   const field = (key: keyof WalgSettings, pattern: RegExp) => {
     const v = s[key]
-    if (typeof v !== 'string' || !pattern.test(v) || v.includes('..')) throw new StackInputError(`wal-g setting ${key} is missing or invalid`)
+    if (typeof v !== 'string' || !pattern.test(v) || v.includes('..'))
+      throw new StackInputError(`wal-g setting ${key} is missing or invalid`)
     return v
   }
   return {
@@ -107,7 +108,11 @@ hot_standby = off
 
 /** Writes a file of the config volume as the postgres user, atomically, from stdin. */
 export function writeFileScript(path: string, mode: '600' | '644'): string[] {
-  return ['sh', '-c', `umask 077 && cat > ${path}.tmp && chmod ${mode} ${path}.tmp && mv ${path}.tmp ${path}`]
+  return [
+    'sh',
+    '-c',
+    `umask 077 && cat > ${path}.tmp && chmod ${mode} ${path}.tmp && mv ${path}.tmp ${path}`,
+  ]
 }
 
 export function walgArgs(...args: string[]): string[] {

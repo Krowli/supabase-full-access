@@ -74,7 +74,9 @@ const provisioner = new Provisioner({
   storage: createMinioStorage(config.minio),
   projectDirs: createProjectDirs(config.projectsHostDir),
   pooler: createSupavisorTenants({ url: config.supavisorUrl, ...admin }),
-  realtime: config.realtimeEnabled ? createRealtimeTenants({ url: config.realtimeUrl, ...admin }) : noTenants,
+  realtime: config.realtimeEnabled
+    ? createRealtimeTenants({ url: config.realtimeUrl, ...admin })
+    : noTenants,
   gateway,
   healthTimeoutMs: config.healthTimeoutMs,
   pollIntervalMs: config.pollIntervalMs,

@@ -25,7 +25,13 @@ export interface Docker {
   /** Whether any container carries the compose project label <id> (a stack Coolify made). */
   projectHasContainers(id: string): Promise<boolean>
   /** `docker exec [-i] -u <user> <container> <args>`, `input` on stdin; returns stdout. */
-  exec(container: string, user: string, args: string[], input?: string, timeoutMs?: number): Promise<string>
+  exec(
+    container: string,
+    user: string,
+    args: string[],
+    input?: string,
+    timeoutMs?: number
+  ): Promise<string>
   /** `docker kill --signal <signal> <container>`. */
   signal(container: string, signal: string): Promise<void>
   /** The image the container runs. */
@@ -59,7 +65,8 @@ const exists = (path: string) =>
   )
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
-const newId = () => Array.from({ length: 24 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('')
+const newId = () =>
+  Array.from({ length: 24 }, () => ID_ALPHABET[randomInt(ID_ALPHABET.length)]).join('')
 
 type PsLine = { Service?: string; State?: string; Health?: string }
 
@@ -78,7 +85,8 @@ export function stackStatus(psJsonLines: string): string {
     })
   if (!rows.length || !rows.some((r) => r.State === 'running')) return 'exited'
   if (rows.some((r) => r.Health === 'starting')) return 'starting:unhealthy'
-  if (rows.every((r) => r.State === 'running' && (!r.Health || r.Health === 'healthy'))) return 'running:healthy'
+  if (rows.every((r) => r.State === 'running' && (!r.Health || r.Health === 'healthy')))
+    return 'running:healthy'
   return 'running:unhealthy'
 }
 
@@ -159,8 +167,14 @@ export class Stacks {
     if (!meta) return null
     // A stack registered but not started yet has no compose.yaml, and compose refuses to run
     // without one: nothing of it runs.
-    if (!(await exists(join(this.stackDir(id), 'compose.yaml')))) return { ...meta, status: 'exited' }
-    const ps = await this.config.docker.compose(id, this.stackDir(id), ['ps', '-a', '--format', 'json'])
+    if (!(await exists(join(this.stackDir(id), 'compose.yaml'))))
+      return { ...meta, status: 'exited' }
+    const ps = await this.config.docker.compose(id, this.stackDir(id), [
+      'ps',
+      '-a',
+      '--format',
+      'json',
+    ])
     return { ...meta, status: stackStatus(ps) }
   }
 
@@ -238,9 +252,12 @@ export class Stacks {
   async delete(id: string): Promise<void> {
     const meta = await this.must(id)
     await this.writeFiles(meta)
-    await this.config.docker.compose(id, this.stackDir(id), ['down', '--volumes', '--remove-orphans'])
+    await this.config.docker.compose(id, this.stackDir(id), [
+      'down',
+      '--volumes',
+      '--remove-orphans',
+    ])
     await this.config.docker.removeNetwork(id)
     await rm(this.stackDir(id), { recursive: true, force: true })
   }
 }
-

@@ -70,7 +70,8 @@ function authorized(req: IncomingMessage, token: string): boolean {
   return given.length === expected.length && timingSafeEqual(given, expected)
 }
 
-const STACK_PATH = /^\/stacks\/([a-z0-9]{24})(?:\/(envs|start|update|restart|wal-g|wal-g\/backup|wal-g\/backups|pitr-scratch))?$/
+const STACK_PATH =
+  /^\/stacks\/([a-z0-9]{24})(?:\/(envs|start|update|restart|wal-g|wal-g\/backup|wal-g\/backups|pitr-scratch))?$/
 
 export function createRunnerServer(deps: RunnerServerDeps): Server {
   const { stacks, pitr, token } = deps
@@ -113,11 +114,17 @@ export function createRunnerServer(deps: RunnerServerDeps): Server {
           const { envs } = await readJson(req)
           if (typeof envs !== 'object' || envs === null || Array.isArray(envs))
             throw new HttpError(400, 'envs must be an object')
-          await stacks.setEnvs(id, Object.fromEntries(Object.entries(envs).map(([k, v]) => [k, String(v)])))
+          await stacks.setEnvs(
+            id,
+            Object.fromEntries(Object.entries(envs).map(([k, v]) => [k, String(v)]))
+          )
           log('stack.envs_set', { id, keys: Object.keys(envs) })
           return send(res, 204)
         }
-        if ((action === 'start' || action === 'update' || action === 'restart') && req.method === 'POST') {
+        if (
+          (action === 'start' || action === 'update' || action === 'restart') &&
+          req.method === 'POST'
+        ) {
           await stacks[action](id)
           log(`stack.${action}`, { id })
           return send(res, 204)
@@ -138,10 +145,15 @@ export function createRunnerServer(deps: RunnerServerDeps): Server {
           log('pitr.backup_pushed', { id, backups: backups.length })
           return send(res, 200, { backups })
         }
-        if (action === 'wal-g/backups' && req.method === 'GET') return send(res, 200, { backups: await pitr.backups(id) })
+        if (action === 'wal-g/backups' && req.method === 'GET')
+          return send(res, 200, { backups: await pitr.backups(id) })
         if (action === 'pitr-scratch' && req.method === 'POST') {
           const body = await readJson(req)
-          const host = await pitr.startScratch(id, String(body.backup ?? ''), String(body.target_time ?? ''))
+          const host = await pitr.startScratch(
+            id,
+            String(body.backup ?? ''),
+            String(body.target_time ?? '')
+          )
           log('pitr.scratch_ready', { id, target_time: body.target_time })
           return send(res, 200, { host })
         }

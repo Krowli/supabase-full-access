@@ -61,7 +61,10 @@ export async function archiveStatus(exec: Exec, db: ProjectDb): Promise<ArchiveS
   const sql = `select current_setting('archive_mode'), coalesce(last_archived_wal, ''),
     coalesce(extract(epoch from last_archived_time)::text, ''), failed_count,
     coalesce(extract(epoch from last_failed_time)::text, '') from pg_stat_archiver`
-  const r = await must(exec, 'Read the WAL archive status', 'psql', ['-At', '-F', '|', '-c', sql], { env: pgEnv(db), timeoutMs: 30_000 })
+  const r = await must(exec, 'Read the WAL archive status', 'psql', ['-At', '-F', '|', '-c', sql], {
+    env: pgEnv(db),
+    timeoutMs: 30_000,
+  })
   const [mode, wal, archivedAt, failed, failedAt] = r.stdout.trim().split('|')
   return {
     archiveMode: mode === 'on' || mode === 'always',
@@ -85,7 +88,13 @@ export async function sealArchive(
 ): Promise<void> {
   const env = pgEnv(db)
   await must(exec, 'Write a commit', 'psql', ['-At', '-c', 'select txid_current()'], { env })
-  const r = await must(exec, 'Switch the WAL file', 'psql', ['-At', '-c', 'select pg_walfile_name(pg_switch_wal())'], { env })
+  const r = await must(
+    exec,
+    'Switch the WAL file',
+    'psql',
+    ['-At', '-c', 'select pg_walfile_name(pg_switch_wal())'],
+    { env }
+  )
   const wal = r.stdout.trim()
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -93,7 +102,9 @@ export async function sealArchive(
     if (s.lastArchivedWal && s.lastArchivedWal >= wal) return
     await sleep(3000)
   }
-  throw new Error(`WAL file ${wal} was not archived within ${Math.round(timeoutMs / 60_000)} minutes`)
+  throw new Error(
+    `WAL file ${wal} was not archived within ${Math.round(timeoutMs / 60_000)} minutes`
+  )
 }
 
 /** The newest base backup that finished before the moment: recovery replays WAL from there. */
@@ -111,7 +122,8 @@ export function pitrBackupDue(now: Date, schedule: string, s: PitrState): boolea
   const slot = latestSlot(now, schedule)
   const newest = s.backups.at(-1)
   if (newest && Date.parse(newest.finish_time) >= slot.getTime()) return false
-  if (!newest) return s.lastAttempt === null || now.getTime() - s.lastAttempt.getTime() > 60 * 60_000
+  if (!newest)
+    return s.lastAttempt === null || now.getTime() - s.lastAttempt.getTime() > 60 * 60_000
   return s.lastAttempt === null || s.lastAttempt < slot
 }
 
@@ -126,7 +138,12 @@ export function pitrProblems(now: Date, id: string, schedule: string, s: PitrSta
   const a = s.archive
   if (!a?.archiveMode) return problems
   const archivedAt = a.lastArchivedAt ?? s.archiveOnSince
-  if (a.lastFailedAt && (!a.lastArchivedAt || a.lastFailedAt > a.lastArchivedAt) && archivedAt && now.getTime() - archivedAt.getTime() > FAILING_MS)
+  if (
+    a.lastFailedAt &&
+    (!a.lastArchivedAt || a.lastFailedAt > a.lastArchivedAt) &&
+    archivedAt &&
+    now.getTime() - archivedAt.getTime() > FAILING_MS
+  )
     problems.push(`${id}: WAL archiving fails since ${archivedAt.toISOString()}`)
   const newest = s.backups?.at(-1)
   const expected = latestSlot(new Date(now.getTime() - GRACE_MS), schedule)
@@ -138,7 +155,9 @@ export function pitrProblems(now: Date, id: string, schedule: string, s: PitrSta
 /** What Studio's Backups page shows of PITR. No keys. */
 export function pitrView(now: Date, s: PitrState | undefined) {
   const a = s?.archive ?? null
-  const failing = Boolean(a?.lastFailedAt && (!a.lastArchivedAt || a.lastFailedAt > a.lastArchivedAt))
+  const failing = Boolean(
+    a?.lastFailedAt && (!a.lastArchivedAt || a.lastFailedAt > a.lastArchivedAt)
+  )
   const backups = s?.backups ?? []
   return {
     archive_mode: a ? (a.archiveMode ? 'on' : 'off') : null,
@@ -148,8 +167,17 @@ export function pitrView(now: Date, s: PitrState | undefined) {
     // From the first base backup to now (a restore seals the archive first), or to the last
     // archived file while archiving fails.
     earliest: backups[0]?.finish_time ?? null,
-    latest: !a?.archiveMode || !backups.length ? null : failing ? (a.lastArchivedAt?.toISOString() ?? null) : now.toISOString(),
-    backups: backups.map((b) => ({ name: b.name, finish_time: b.finish_time, compressed_size: b.compressed_size })),
+    latest:
+      !a?.archiveMode || !backups.length
+        ? null
+        : failing
+          ? (a.lastArchivedAt?.toISOString() ?? null)
+          : now.toISOString(),
+    backups: backups.map((b) => ({
+      name: b.name,
+      finish_time: b.finish_time,
+      compressed_size: b.compressed_size,
+    })),
     last_error: s?.refreshError ?? s?.backupError ?? null,
     checked_at: s?.checkedAt?.toISOString() ?? null,
   }
