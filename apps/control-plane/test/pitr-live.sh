@@ -44,6 +44,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+say "leftovers of an earlier run (projects named $NAME or $NAME-restored only)"
+for r in $(call cp GET /projects | json "(j.projects ?? j).filter((p) => p.name === '$NAME' || p.name === '$NAME-restored').map((p) => p.ref).join(' ')"); do
+  call cp DELETE "/projects/$r" >/dev/null && echo "deleted $r"
+done
+
 say "a new project: $NAME"
 REF=$(call cp POST /projects "{\"name\":\"$NAME\"}" | json j.ref)
 active() { [ "$(call cp GET "/projects/$1" | json j.status)" = ACTIVE_HEALTHY ]; }
