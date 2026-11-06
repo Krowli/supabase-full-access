@@ -1,7 +1,17 @@
 import { randomInt } from 'node:crypto'
-import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
+import {
+  checkBundle,
+  checkSecrets,
+  FUNCTION_NAME,
+  functionNames,
+  secretsFile,
+  writeBundle,
+  type FunctionsBundle,
+} from './functions.ts'
+import { POSTGRES_VERSIONS } from '../template.ts'
 import {
   buildStack,
   PROJECT_REF,
@@ -45,8 +55,28 @@ export interface Docker {
   logs(container: string, lines: number): Promise<string>
 }
 
-export type StackMeta = { id: string; ref: string; name: string }
+/**
+ * meta.json of a stack. `postgres` is absent for stacks made before Postgres 17 (they run 15, the
+ * template's image); `functions` is true once Edge Functions were deployed to it.
+ */
+export type StackMeta = {
+  id: string
+  ref: string
+  name: string
+  postgres?: '17'
+  functions?: boolean
+}
 export type StackState = StackMeta & { status: string }
+
+/** What `GET /stacks/<id>/functions` tells: the deployed functions and the secrets' names only. */
+export type FunctionsState = {
+  enabled: boolean
+  functions: string[]
+  verify_jwt: Record<string, boolean>
+  secrets: string[]
+}
+
+const FUNCTIONS_SERVICE = 'supabase-functions'
 
 export type StacksConfig = {
   /** One directory per stack: meta.json, .env (mode 600), compose.yaml and its bound files. */
@@ -56,6 +86,10 @@ export type StacksConfig = {
   /** The project template rendered for a ref (src/template.ts). */
   render: (ref: string) => string
   docker: Docker
+  /** The database image of stacks made on Postgres 17; without it, none can be made. */
+  postgres17Image?: string
+  /** The Edge Functions router (deploy/platform/functions-main), copied into stacks with functions. */
+  functionsMainDir?: string
 }
 
 const exists = (path: string) =>
@@ -122,6 +156,10 @@ export class Stacks {
     return meta
   }
 
+  private async saveMeta(meta: StackMeta): Promise<void> {
+    await writeFile(join(this.stackDir(meta.id), 'meta.json'), JSON.stringify(meta))
+  }
+
   async find(ref: string): Promise<string | null> {
     if (!PROJECT_REF.test(ref)) throw new StackInputError(`Invalid project ref ${ref}`)
     let ids: string[]
@@ -140,11 +178,23 @@ export class Stacks {
   /**
    * Registers the stack of a ref (or returns the one it has). `adoptId` takes over a stack Coolify
    * made under that id, in place: allowed only when containers of that compose project exist.
+   * `postgres` is the major of a new stack's database (default 15, the template's).
    */
-  async create(ref: string, name: string, adoptId?: string): Promise<string> {
+  async create(
+    ref: string,
+    name: string,
+    adoptId?: string,
+    postgres: string = '15'
+  ): Promise<string> {
     const existing = await this.find(ref)
     if (existing) return existing
     if (typeof name !== 'string' || name.length > 200) throw new StackInputError('Invalid name')
+    if (!(POSTGRES_VERSIONS as readonly string[]).includes(postgres))
+      throw new StackInputError(`Postgres ${postgres} is not one of ${POSTGRES_VERSIONS.join(', ')}`)
+    if (postgres === '17' && !this.config.postgres17Image)
+      throw new StackInputError('This runner has no Postgres 17 image (PROJECT_POSTGRES17_IMAGE)')
+    if (postgres === '17' && adoptId !== undefined)
+      throw new StackInputError('A stack taken over from Coolify runs Postgres 15')
     let id = newId()
     if (adoptId !== undefined) {
       this.stackDir(adoptId)
@@ -154,7 +204,7 @@ export class Stacks {
     }
     const dir = this.stackDir(id)
     await mkdir(dir, { recursive: true, mode: 0o700 })
-    await writeFile(join(dir, 'meta.json'), JSON.stringify({ id, ref, name } satisfies StackMeta))
+    await this.saveMeta({ id, ref, name, ...(postgres === '17' ? { postgres } : {}) })
     return id
   }
 
@@ -199,7 +249,19 @@ export class Stacks {
   /** compose.yaml and the bound files from the current template. */
   private async writeFiles(meta: StackMeta): Promise<string[]> {
     const dir = this.stackDir(meta.id)
-    const stack = buildStack(this.config.render(meta.ref), meta.id)
+    // Never the template's Postgres 15 image for a Postgres 17 stack: it would not start on the data.
+    if (meta.postgres === '17' && !this.config.postgres17Image)
+      throw new Error(`Stack ${meta.id} runs Postgres 17 and this runner has no image for it`)
+    const stack = buildStack(this.config.render(meta.ref), meta.id, {
+      postgresImage: meta.postgres === '17' ? this.config.postgres17Image : undefined,
+      functions: meta.functions === true,
+    })
+    if (meta.functions) {
+      if (!this.config.functionsMainDir) throw new Error('This runner has no Edge Functions router')
+      await rm(join(dir, 'functions-main'), { recursive: true, force: true })
+      await cp(this.config.functionsMainDir, join(dir, 'functions-main'), { recursive: true })
+      await mkdir(join(dir, 'functions'), { recursive: true })
+    }
     for (const file of stack.files) {
       await mkdir(dirname(join(dir, file.path)), { recursive: true })
       await writeFile(join(dir, file.path), file.content)
@@ -208,9 +270,8 @@ export class Stacks {
     return stack.containers
   }
 
-  private async up(meta: StackMeta, extra: string[] = []): Promise<void> {
-    // compose fills a missing ${NAME} with an empty string: a stack started without its secrets
-    // would run (or, taken over, restart) with empty passwords. Refuse instead.
+  /** compose fills a missing ${NAME} with an empty string: refuse to start a stack without its secrets. */
+  private async requireEnvs(meta: StackMeta): Promise<void> {
     let env = ''
     try {
       env = await readFile(join(this.stackDir(meta.id), '.env'), 'utf8')
@@ -220,6 +281,11 @@ export class Stacks {
     const have = new Set(env.split('\n').map((l) => l.slice(0, l.indexOf('='))))
     const missing = STACK_ENV_KEYS.filter((k) => !have.has(k))
     if (missing.length) throw new StackInputError(`Stack ${meta.id} lacks ${missing.join(', ')}`)
+  }
+
+  private async up(meta: StackMeta, extra: string[] = []): Promise<void> {
+    // A stack started without its secrets would run (or, taken over, restart) with empty passwords.
+    await this.requireEnvs(meta)
     const containers = await this.writeFiles(meta)
     const { docker, sharedNetwork } = this.config
     const dir = this.stackDir(meta.id)
@@ -246,6 +312,80 @@ export class Stacks {
     const meta = await this.must(id)
     await this.up(meta)
     await this.config.docker.compose(id, this.stackDir(id), ['restart'])
+  }
+
+  /**
+   * (Re)creates the Edge Functions container alone and restarts it, so it serves the functions on disk
+   * now: the rest of the stack is left as it runs (a template change reaches it at its next restart).
+   */
+  private async upFunctions(meta: StackMeta): Promise<void> {
+    await this.requireEnvs(meta)
+    await this.writeFiles(meta)
+    const { docker, sharedNetwork } = this.config
+    const dir = this.stackDir(meta.id)
+    const container = `${FUNCTIONS_SERVICE}-${meta.id}`
+    await docker.ensureNetwork(meta.id)
+    await docker.compose(meta.id, dir, ['up', '--no-start', '--no-deps', FUNCTIONS_SERVICE])
+    await docker.attach(container, sharedNetwork, container)
+    await docker.compose(meta.id, dir, ['up', '-d', '--no-deps', FUNCTIONS_SERVICE])
+    await docker.compose(meta.id, dir, ['restart', FUNCTIONS_SERVICE])
+  }
+
+  /** Deploys the project's Edge Functions (all of them: one left out is removed) and serves them. */
+  async deployFunctions(id: string, input: { files?: unknown; verify_jwt?: unknown }): Promise<string[]> {
+    const meta = await this.must(id)
+    const bundle: FunctionsBundle = checkBundle(input)
+    await writeBundle(this.stackDir(id), bundle)
+    if (!meta.functions) await this.saveMeta({ ...meta, functions: true })
+    await this.upFunctions({ ...meta, functions: true })
+    return functionNames(bundle.files)
+  }
+
+  /** Replaces the functions' secrets, all of them; they apply at once when functions run. */
+  async setFunctionSecrets(id: string, input: unknown): Promise<string[]> {
+    const meta = await this.must(id)
+    const secrets = checkSecrets(input)
+    await writeFile(join(this.stackDir(id), 'functions.env'), secretsFile(secrets), { mode: 0o600 })
+    await chmod(join(this.stackDir(id), 'functions.env'), 0o600)
+    if (meta.functions) await this.upFunctions(meta)
+    return Object.keys(secrets).sort()
+  }
+
+  async functions(id: string): Promise<FunctionsState> {
+    const meta = await this.must(id)
+    const dir = this.stackDir(id)
+    const read = (name: string) =>
+      readFile(join(dir, name), 'utf8').catch((err: NodeJS.ErrnoException) => {
+        if (err.code === 'ENOENT') return ''
+        throw err
+      })
+    const manifest = await read('functions/.platform.json')
+    const names = meta.functions
+      ? (await readdir(join(dir, 'functions'), { withFileTypes: true }))
+          .filter((e) => e.isDirectory())
+          .map((e) => e.name)
+      : []
+    return {
+      enabled: meta.functions === true,
+      functions: names.filter((n) => FUNCTION_NAME.test(n)).sort(),
+      verify_jwt: manifest ? JSON.parse(manifest).verify_jwt ?? {} : {},
+      secrets: (await read('functions.env'))
+        .split('\n')
+        .filter((l) => l.includes('='))
+        .map((l) => l.slice(0, l.indexOf('=')))
+        .sort(),
+    }
+  }
+
+  /** Edge Functions off: the container, the functions, their secrets and module cache go. */
+  async removeFunctions(id: string): Promise<void> {
+    const meta = await this.must(id)
+    await this.config.docker.remove(`${FUNCTIONS_SERVICE}-${id}`, [])
+    const { functions: _, ...rest } = meta
+    await this.saveMeta(rest)
+    for (const name of ['functions', 'functions-main', 'functions-cache', 'functions.env'])
+      await rm(join(this.stackDir(id), name), { recursive: true, force: true })
+    if (await exists(join(this.stackDir(id), 'compose.yaml'))) await this.writeFiles(rest)
   }
 
   /** Removes the containers, the stack's volumes and network, and its directory. */

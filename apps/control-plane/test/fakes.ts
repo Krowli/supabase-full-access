@@ -5,6 +5,7 @@ import type { ProjectDirs } from '../src/project-dirs.ts'
 import { routedProjects } from '../src/provisioner.ts'
 import type { Project, ProjectStatus, ProjectUpdate, Registry } from '../src/registry.ts'
 import type { ProjectSecrets } from '../src/secrets.ts'
+import type { PostgresVersion } from '../src/template.ts'
 import type { TenantRegistry, TenantTarget } from '../src/tenants.ts'
 
 export class MemoryRegistry implements Registry {
@@ -12,11 +13,16 @@ export class MemoryRegistry implements Registry {
   secrets = new Map<string, ProjectSecrets>()
   statusHistory: { ref: string; status: ProjectStatus }[] = []
 
-  async insert(p: { ref: string; name: string }, secrets: ProjectSecrets) {
+  async insert(
+    p: { ref: string; name: string; postgres_version?: PostgresVersion },
+    secrets: ProjectSecrets
+  ) {
     if (this.projects.has(p.ref)) throw new Error('duplicate key')
     const now = new Date()
     const project: Project = {
       ...p,
+      postgres_version: p.postgres_version ?? '15',
+      functions: false,
       status: 'CREATING',
       coolify_service_uuid: null,
       step: null,
@@ -81,8 +87,15 @@ export class FakeCoolify implements Coolify {
     this.calls.push('findServiceByName')
     return [...this.services.values()].find((s) => s.name === name)?.uuid ?? null
   }
-  async createService(name: string, _description: string, compose: string) {
+  createOptions: ({ postgres?: string } | undefined)[] = []
+  async createService(
+    name: string,
+    _description: string,
+    compose: string,
+    options?: { postgres?: string }
+  ) {
     this.calls.push('createService')
+    this.createOptions.push(options)
     this.maybeFail('createService', 'before')
     const uuid = `svc${++this.seq}`
     this.services.set(uuid, {

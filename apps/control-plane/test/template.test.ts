@@ -42,26 +42,33 @@ describe('renderTemplate', () => {
 })
 
 describe('project-compose.yaml', () => {
-  it('renders to a compose with exactly db, auth, rest and storage, and no published ports', () => {
+  it('renders to a compose with exactly db, auth, rest, storage and (only with functions) Edge Functions, and no published ports', () => {
     const out = render()
     expect(out).not.toMatch(/\{\{[A-Z0-9_]+\}\}/)
     const compose = parse(out) as Compose
     expect(Object.keys(compose.services).sort()).toEqual([
       'supabase-auth',
       'supabase-db',
+      'supabase-functions',
       'supabase-rest',
       'supabase-storage',
     ])
     for (const svc of Object.values(compose.services)) expect(svc.ports).toBeUndefined()
+    expect(
+      (compose.services['supabase-functions'] as Record<string, unknown>)['x-platform-only-with']
+    ).toBe('functions')
   })
 
-  it('uses the same images as the fork compose', () => {
+  it('uses the same images as the fork compose, and upstream self-hosted Edge Functions', () => {
     const fork = parse(
       readFileSync(resolve(repo, 'deploy/coolify/docker-compose.yaml'), 'utf8')
     ) as Compose
+    const upstream = parse(readFileSync(resolve(repo, 'docker/docker-compose.yml'), 'utf8')) as Compose
     const compose = parse(render()) as Compose
     for (const [name, svc] of Object.entries(compose.services)) {
-      expect(svc.image, name).toBe(fork.services[name].image)
+      const expected =
+        name === 'supabase-functions' ? upstream.services.functions.image : fork.services[name].image
+      expect(svc.image, name).toBe(expected)
     }
   })
 

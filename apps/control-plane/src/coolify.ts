@@ -1,4 +1,5 @@
 // Coolify API v1 (checked against Coolify 4.4.6). Only the calls the provisioner needs.
+import type { PostgresVersion } from './template.ts'
 
 export type CoolifyService = {
   uuid: string
@@ -7,10 +8,26 @@ export type CoolifyService = {
   connectToDockerNetwork: boolean
 }
 
+/** A stack's Edge Functions (src/runner/functions.ts): only the runner backend has them. */
+export type StackFunctions = {
+  /** All the functions (one left out is removed); returns their names. */
+  deploy(uuid: string, bundle: { files?: unknown; verify_jwt?: unknown }): Promise<string[]>
+  get(uuid: string): Promise<unknown>
+  remove(uuid: string): Promise<void>
+  /** All the secrets; returns their names. */
+  setSecrets(uuid: string, secrets: unknown): Promise<string[]>
+}
+
 export interface Coolify {
   /** The uuid of the service with this name in the configured project environment, if any. */
   findServiceByName(name: string): Promise<string | null>
-  createService(name: string, description: string, composeRaw: string): Promise<string>
+  /** `postgres` is the major of the stack's database; Coolify stacks run the template's (15). */
+  createService(
+    name: string,
+    description: string,
+    composeRaw: string,
+    options?: { postgres?: PostgresVersion }
+  ): Promise<string>
   getService(uuid: string): Promise<CoolifyService | null>
   connectToDockerNetwork(uuid: string): Promise<void>
   setEnvs(uuid: string, envs: Record<string, string>): Promise<void>
@@ -20,6 +37,7 @@ export interface Coolify {
   restart(uuid: string): Promise<void>
   /** Queues deletion of the service, its volumes, networks and configuration. */
   deleteService(uuid: string): Promise<void>
+  functions?: StackFunctions
 }
 
 export type CoolifyConfig = {
@@ -124,7 +142,9 @@ export function createCoolifyClient(config: CoolifyConfig): Coolify {
       return env.services?.find((s) => s.name === name)?.uuid ?? null
     },
 
-    async createService(name, description, composeRaw) {
+    async createService(name, description, composeRaw, options) {
+      if (options?.postgres && options.postgres !== '15')
+        throw new CoolifyError(`Postgres ${options.postgres} needs the runner (STACK_BACKEND=runner)`, 400)
       const res = await call<{ uuid: string }>('POST', '/services', {
         name,
         description,

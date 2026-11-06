@@ -1,8 +1,15 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
-import { ConflictError, NotFoundError, routedProjects, type Provisioner } from './provisioner.ts'
+import {
+  ConflictError,
+  InputError,
+  NotFoundError,
+  routedProjects,
+  type Provisioner,
+} from './provisioner.ts'
 import type { Project, Registry } from './registry.ts'
+import { RunnerError } from './runner-client.ts'
 
 export type ServerDeps = {
   registry: Registry
@@ -29,6 +36,8 @@ export function projectView(p: Project, domainSuffix: string) {
     name: p.name,
     status: p.status,
     step: p.step,
+    postgres_version: p.postgres_version,
+    functions: p.functions,
     coolify_service_uuid: u,
     endpoint: `https://${p.ref}.${domainSuffix}`,
     internal: u
@@ -51,12 +60,12 @@ function send(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body))
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, limit = 64 * 1024): Promise<Record<string, unknown>> {
   let size = 0
   const chunks: Buffer[] = []
   for await (const chunk of req) {
     size += chunk.length
-    if (size > 64 * 1024) throw new HttpError(413, 'Body too large')
+    if (size > limit) throw new HttpError(413, 'Body too large')
     chunks.push(chunk)
   }
   if (size === 0) return {}
@@ -116,17 +125,38 @@ export function createApp(deps: ServerDeps): Server {
         }
         const name = typeof body.name === 'string' ? body.name.trim() : ''
         if (!name || name.length > 64) throw new HttpError(400, 'name is required (1-64 chars)')
-        const { project } = await provisioner.create(name)
+        if (body.postgres_version !== undefined && typeof body.postgres_version !== 'string')
+          throw new HttpError(400, 'postgres_version must be a string')
+        const { project } = await provisioner.create(name, { postgres_version: body.postgres_version })
         return send(res, 201, view(project))
       }
       throw new HttpError(405, 'Method not allowed')
     }
 
-    const match = /^\/projects\/([^/]+)(\/secrets|\/stack)?$/.exec(path)
+    const match = /^\/projects\/([^/]+)(\/secrets|\/stack|\/functions|\/functions\/secrets)?$/.exec(path)
     if (match) {
       const [, ref, sub] = match
       const secrets = sub === '/secrets'
       if (!REF.test(ref)) throw new HttpError(404, 'Project not found')
+      // Edge Functions: the code (JSON escapes it, 2 MB of files at most) and the secrets, never logged.
+      if (sub === '/functions') {
+        if (method === 'PUT') {
+          const body = await readJson(req, 5 * 1024 * 1024)
+          const functions = await provisioner.deployFunctions(ref, body)
+          return send(res, 200, { ref, functions })
+        }
+        if (method === 'GET') return send(res, 200, await provisioner.functions(ref))
+        if (method === 'DELETE') {
+          await provisioner.removeFunctions(ref)
+          return send(res, 200, { ref, functions: [] })
+        }
+        throw new HttpError(405, 'Method not allowed')
+      }
+      if (sub === '/functions/secrets') {
+        if (method !== 'PUT') throw new HttpError(405, 'Method not allowed')
+        const body = await readJson(req, 1024 * 1024)
+        return send(res, 200, { ref, secrets: await provisioner.setFunctionSecrets(ref, body.secrets) })
+      }
       if (sub === '/stack') {
         if (method !== 'POST') throw new HttpError(405, 'Method not allowed')
         // Rewrites the project's compose from the current template and restarts its stack.
@@ -161,7 +191,9 @@ export function createApp(deps: ServerDeps): Server {
             ? 404
             : err instanceof ConflictError
               ? 409
-              : 500
+              : err instanceof InputError || (err instanceof RunnerError && err.status === 400)
+                ? 400
+                : 500
       if (status === 500) console.error(JSON.stringify({ event: 'http.error', error: String(err) }))
       send(res, status, { error: status === 500 ? 'Internal error' : (err as Error).message })
     })

@@ -42,11 +42,20 @@ const log = (event: string, fields: Record<string, unknown>) =>
   console.log(JSON.stringify({ time: new Date().toISOString(), event, ...fields }))
 const docker = createDocker()
 const sharedNetwork = env.RUNNER_SHARED_NETWORK ?? 'coolify'
+// The database image of projects made on Postgres 17 (Supabase's image plus wal-g:
+// deploy/platform/postgres17). Unset: new projects can only be made on Postgres 15.
+const postgres17Image = env.PROJECT_POSTGRES17_IMAGE || undefined
+if (postgres17Image && !/^[a-z0-9][a-z0-9./_:@-]*$/.test(postgres17Image))
+  throw new Error('PROJECT_POSTGRES17_IMAGE is not an image reference')
 const stacks = new Stacks({
   dir: env.RUNNER_STACKS_DIR ?? '/data/supa-runner/stacks',
   sharedNetwork,
   render,
   docker,
+  postgres17Image,
+  functionsMainDir:
+    env.FUNCTIONS_MAIN_DIR ??
+    resolve(import.meta.dirname, '../../../../deploy/platform/functions-main'),
 })
 
 if (command === 'render') {

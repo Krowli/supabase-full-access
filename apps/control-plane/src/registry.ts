@@ -1,6 +1,7 @@
 import pg from 'pg'
 
 import { decrypt, encrypt, SECRET_COLUMNS, type ProjectSecrets } from './secrets.ts'
+import { POSTGRES_VERSIONS, type PostgresVersion } from './template.ts'
 
 export const STATUSES = ['CREATING', 'COMING_UP', 'ACTIVE_HEALTHY', 'FAILED', 'DELETING'] as const
 export type ProjectStatus = (typeof STATUSES)[number]
@@ -15,14 +16,21 @@ export type Project = {
   created_at: Date
   updated_at: Date
   last_error: string | null
+  /** Projects made before Postgres 17 was offered are '15'. */
+  postgres_version: PostgresVersion
+  /** Whether the project has Edge Functions deployed (Kong routes /functions/v1/ only then). */
+  functions: boolean
 }
 
 export type ProjectUpdate = Partial<
-  Pick<Project, 'status' | 'coolify_service_uuid' | 'step' | 'last_error'>
+  Pick<Project, 'status' | 'coolify_service_uuid' | 'step' | 'last_error' | 'functions'>
 >
 
 export interface Registry {
-  insert(project: { ref: string; name: string }, secrets: ProjectSecrets): Promise<Project>
+  insert(
+    project: { ref: string; name: string; postgres_version?: PostgresVersion },
+    secrets: ProjectSecrets
+  ): Promise<Project>
   get(ref: string): Promise<Project | null>
   list(): Promise<Project[]>
   listByStatus(statuses: ProjectStatus[]): Promise<Project[]>
@@ -56,10 +64,15 @@ create table if not exists _platform.project_secrets (
   s3_access_key text not null,
   s3_secret_key text not null
 );
+
+-- Added with Postgres 17 and Edge Functions: the projects made before run 15 and have none.
+alter table _platform.projects add column if not exists postgres_version text not null default '15'
+  check (postgres_version in (${POSTGRES_VERSIONS.map((v) => `'${v}'`).join(', ')}));
+alter table _platform.projects add column if not exists functions boolean not null default false;
 `
 
 const PROJECT_COLUMNS =
-  'ref, name, status, coolify_service_uuid, step, created_at, updated_at, last_error'
+  'ref, name, status, coolify_service_uuid, step, created_at, updated_at, last_error, postgres_version, functions'
 
 /** Idempotent; an advisory lock keeps two starting instances from racing. */
 export async function migrate(pool: pg.Pool): Promise<void> {
@@ -84,8 +97,8 @@ export function createPgRegistry(pool: pg.Pool, key: Buffer): Registry {
       try {
         await client.query('begin')
         const { rows } = await client.query<Project>(
-          `insert into _platform.projects (ref, name, status) values ($1, $2, 'CREATING') returning ${PROJECT_COLUMNS}`,
-          [project.ref, project.name]
+          `insert into _platform.projects (ref, name, status, postgres_version) values ($1, $2, 'CREATING', $3) returning ${PROJECT_COLUMNS}`,
+          [project.ref, project.name, project.postgres_version ?? '15']
         )
         await client.query(
           `insert into _platform.project_secrets (ref, ${SECRET_COLUMNS.join(', ')}) values ($1, ${SECRET_COLUMNS.map((_, i) => `$${i + 2}`).join(', ')})`,

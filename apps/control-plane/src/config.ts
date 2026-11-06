@@ -4,7 +4,13 @@ import type { CoolifyTargetConfig } from './coolify.ts'
 import type { DashboardOptions } from './kong.ts'
 import type { RunnerConfig } from './runner-client.ts'
 import { parseSecretsKey } from './secrets.ts'
-import type { SharedEndpoints } from './template.ts'
+import { POSTGRES_VERSIONS, type PostgresVersion, type SharedEndpoints } from './template.ts'
+
+function postgresVersion(value: string): PostgresVersion {
+  if (!(POSTGRES_VERSIONS as readonly string[]).includes(value))
+    throw new Error(`NEW_PROJECT_POSTGRES_VERSION must be one of ${POSTGRES_VERSIONS.join(', ')}`)
+  return value as PostgresVersion
+}
 
 export type Config = {
   port: number
@@ -32,6 +38,11 @@ export type Config = {
   realtimeUrl: string
   /** false (REALTIME_ENABLED=false): the platform runs without Realtime; projects get no tenant. */
   realtimeEnabled: boolean
+  /**
+   * The Postgres major of new projects that do not name one (NEW_PROJECT_POSTGRES_VERSION, default
+   * 15). 17 needs the runner with its Postgres 17 image (PROJECT_POSTGRES17_IMAGE there).
+   */
+  newProjectPostgres: PostgresVersion
   adminJwtSecret: string
   minio: { url: string; rootUser: string; rootPassword: string }
   /** Studio, routed by Kong at studio.<suffix> with basic auth, when DASHBOARD_URL is set. */
@@ -90,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     supavisorUrl: env.SUPAVISOR_URL ?? 'http://supavisor:4000',
     realtimeUrl: env.REALTIME_URL ?? 'http://realtime:4000',
     realtimeEnabled: env.REALTIME_ENABLED !== 'false',
+    newProjectPostgres: postgresVersion(env.NEW_PROJECT_POSTGRES_VERSION ?? '15'),
     adminJwtSecret: req('PLATFORM_ADMIN_JWT_SECRET'),
     minio: {
       url: env.MINIO_URL ?? 'http://minio:9000',

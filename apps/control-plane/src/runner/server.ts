@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
+import { MAX_BUNDLE_BYTES } from './functions.ts'
 import type { Pitr } from './pitr.ts'
 import { StackInputError, StackNotFoundError, type Stacks } from './stacks.ts'
 
@@ -10,8 +11,9 @@ import { StackInputError, StackNotFoundError, type Stacks } from './stacks.ts'
  *
  *   GET    /health                    no token; {"ok":true}
  *   GET    /stacks?ref=<ref>          {"id"} or 404
- *   POST   /stacks {ref, name}        {"id"}: the existing stack of the ref, or a new one
- *   GET    /stacks/<id>               {"id","ref","name","status"} or 404
+ *   POST   /stacks {ref, name, postgres?}  {"id"}: the existing stack of the ref, or a new one on
+ *                                      Postgres `postgres` ("15", the default, or "17")
+ *   GET    /stacks/<id>               {"id","ref","name","postgres"?,"functions"?,"status"} or 404
  *   PUT    /stacks/<id>/envs {envs}   only the project secrets the template reads
  *   POST   /stacks/<id>/start | /update | /restart
  *   DELETE /stacks/<id>               containers, volumes, network and files
@@ -24,6 +26,13 @@ import { StackInputError, StackNotFoundError, type Stacks } from './stacks.ts'
  *   GET    /stacks/<id>/wal-g/backups               {"backups"}, oldest first
  *   POST   /stacks/<id>/pitr-scratch {backup, target_time}   a read-only copy at that moment; {"host"}
  *   DELETE /stacks/<id>/pitr-scratch                the copy and its volume
+ *
+ * Edge Functions of the stack (src/runner/functions.ts), for the control plane:
+ *
+ *   PUT    /stacks/<id>/functions {files, verify_jwt}   all of them, then served; {"functions"}
+ *   GET    /stacks/<id>/functions                       {"enabled","functions","verify_jwt","secrets"}
+ *   DELETE /stacks/<id>/functions                       off: container, files and secrets go
+ *   PUT    /stacks/<id>/functions/secrets {secrets}     all of them; {"secrets"} (names)
  */
 export type RunnerServerDeps = {
   stacks: Stacks
@@ -45,12 +54,12 @@ function send(res: ServerResponse, status: number, body?: unknown) {
   res.end(body === undefined ? undefined : JSON.stringify(body))
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, limit = 64 * 1024): Promise<Record<string, unknown>> {
   let size = 0
   const chunks: Buffer[] = []
   for await (const chunk of req) {
     size += chunk.length
-    if (size > 64 * 1024) throw new HttpError(413, 'Body too large')
+    if (size > limit) throw new HttpError(413, 'Body too large')
     chunks.push(chunk)
   }
   if (size === 0) return {}
@@ -71,7 +80,7 @@ function authorized(req: IncomingMessage, token: string): boolean {
 }
 
 const STACK_PATH =
-  /^\/stacks\/([a-z0-9]{24})(?:\/(envs|start|update|restart|wal-g|wal-g\/backup|wal-g\/backups|pitr-scratch))?$/
+  /^\/stacks\/([a-z0-9]{24})(?:\/(envs|start|update|restart|wal-g|wal-g\/backup|wal-g\/backups|pitr-scratch|functions|functions\/secrets))?$/
 
 export function createRunnerServer(deps: RunnerServerDeps): Server {
   const { stacks, pitr, token } = deps
@@ -91,8 +100,9 @@ export function createRunnerServer(deps: RunnerServerDeps): Server {
         }
         if (req.method === 'POST') {
           const body = await readJson(req)
-          const id = await stacks.create(String(body.ref ?? ''), String(body.name ?? ''))
-          log('stack.created', { id, ref: body.ref })
+          const postgres = body.postgres === undefined ? undefined : String(body.postgres)
+          const id = await stacks.create(String(body.ref ?? ''), String(body.name ?? ''), undefined, postgres)
+          log('stack.created', { id, ref: body.ref, postgres: postgres ?? '15' })
           return send(res, 200, { id })
         }
       }
@@ -161,6 +171,23 @@ export function createRunnerServer(deps: RunnerServerDeps): Server {
           await pitr.dropScratch(id)
           log('pitr.scratch_removed', { id })
           return send(res, 204)
+        }
+        // A deploy is the code (JSON escapes it: allow twice its size); secrets are never logged.
+        if (action === 'functions' && req.method === 'PUT') {
+          const functions = await stacks.deployFunctions(id, await readJson(req, 2 * MAX_BUNDLE_BYTES + 64 * 1024))
+          log('functions.deployed', { id, functions })
+          return send(res, 200, { functions })
+        }
+        if (action === 'functions' && req.method === 'GET') return send(res, 200, await stacks.functions(id))
+        if (action === 'functions' && req.method === 'DELETE') {
+          await stacks.removeFunctions(id)
+          log('functions.removed', { id })
+          return send(res, 204)
+        }
+        if (action === 'functions/secrets' && req.method === 'PUT') {
+          const secrets = await stacks.setFunctionSecrets(id, (await readJson(req, 1024 * 1024)).secrets)
+          log('functions.secrets_set', { id, secrets })
+          return send(res, 200, { secrets })
         }
       }
       throw new HttpError(404, 'Not found')

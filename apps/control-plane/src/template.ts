@@ -2,6 +2,14 @@ import { readFileSync } from 'node:fs'
 
 import type { ProjectSecrets } from './secrets.ts'
 
+/**
+ * The Postgres majors a project can be made on. The template's database image is 15's; the runner
+ * gives a project made on 17 its 17 image (src/runner/stack.ts). A project keeps its major for life:
+ * its data directory is that major's.
+ */
+export const POSTGRES_VERSIONS = ['15', '17'] as const
+export type PostgresVersion = (typeof POSTGRES_VERSIONS)[number]
+
 /** Shared services as the project stacks reach them on the `coolify` network. */
 export type SharedEndpoints = {
   /** The shared MinIO, e.g. http://minio-<platform-uuid>:9000. Each project gets bucket <ref>. */
