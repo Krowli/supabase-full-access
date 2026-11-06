@@ -1680,3 +1680,49 @@ control plane and the backup service alike).
   from the template under the same names, on the same volumes; the database restarts once.
   `apps/control-plane/test/runner-takeover.sh` checks this on a real Docker host (a row survives,
   only full names on the shared network, restart and delete through the API).
+
+## 22. Point-in-time recovery (2026-11)
+
+A project's database can be restored as it was at any moment of the last `keep_full` days (7 by
+default), not only at last night's backup. Off unless the backup configuration turns it on for a
+project; needs `STACK_BACKEND=runner` (§21). The nightly restic backups (§19) stay as they are.
+
+- **How.** wal-g, which the project image (`supabase/postgres`) ships. The image's `postgresql.conf`
+  includes `/etc/postgresql-custom/wal-g.conf`, a file of the project's own config volume
+  (`<id>_supabase-db-config`): the runner writes the archive settings there (`archive_mode = on`,
+  `archive_command = wal-g wal-push`, `archive_timeout = 60`, so at most a minute is lost) and
+  wal-g's settings next to it (`wal-g.json`, mode 600: the S3 folder, keys, encryption key). The
+  project template does not change. `archive_mode` takes effect at the database's next restart:
+  until then Studio says PITR waits for a restart, and nothing alarms.
+- **Configuration** (`BACKUP_CONFIG`, `src/backup/config.ts`): a top-level `pitr: { prefix,
+  destination?, keep_full? }` and `pitr: true` per project. Each project's WAL and base backups go to
+  `<bucket>/<pitr.prefix>/<ref>`, a folder apart from restic's repositories, encrypted (libsodium)
+  with `HMAC(encryption_key, "wal-g:<ref>")`.
+- **Who does what.** The backup service holds the settings and the schedule: every 5 minutes it
+  writes wal-g's files when they changed and reads `pg_stat_archiver` and the list of base backups;
+  once a day after the schedule it asks for a base backup and keeps the newest `keep_full`. The
+  runner does what needs Docker, through narrow calls with no command line from the caller:
+  `PUT /stacks/<id>/wal-g`, `POST /stacks/<id>/wal-g/backup`, `GET /stacks/<id>/wal-g/backups`,
+  `POST|DELETE /stacks/<id>/pitr-scratch` (`src/runner/pitr.ts`).
+- **Off again.** Removing `pitr: true` stops the base backups only: the database keeps archiving with
+  the settings in its volume. `DELETE /stacks/<id>/wal-g` writes `archive_mode = off` (at the next
+  restart) and `archive_command = '/bin/true'` until then, and removes `wal-g.json`.
+- **Health.** `/health` is 503 when archiving has failed for more than 10 minutes, when the last
+  base backup failed or is a day overdue, or when the destination has a lifecycle rule that deletes
+  old files.
+- **Restore at a moment**, into a new project, like a restic restore: `POST
+  /projects/<ref>/restore {target_time, name}` on the backup service.
+  1. The source gets a commit and a WAL switch, and the service waits until that file is archived,
+     so every moment up to now can be reached (recovery stops at the first commit past the moment).
+  2. The runner starts a copy, `pitr-<id>`, from the newest base backup before the moment, in a
+     volume of its own and with the source's config volume read-only. It replays the WAL up to the
+     moment and pauses there: a read-only standby (`recovery_target_action=pause`, `hot_standby=on`,
+     `archive_mode=off`). In that state pg_cron and pg_net do not run, nothing is written, and the
+     source's archive is only read.
+  3. The service dumps the copy the way a nightly backup dumps a project (roles, `pg_dump`, the
+     pgsodium key). It then restores that dump into the new project with the restic restore's code;
+     Storage files and settings are taken as they are now, since the WAL has neither.
+  4. The copy is removed.
+- **Checked live** by `apps/control-plane/test/pitr-live.sh` on the platform's server, with
+  projects of its own: rows deleted after a moment are back in the project restored at it, and a
+  broken archive makes `/health` 503.

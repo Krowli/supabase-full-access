@@ -28,7 +28,7 @@ export type ProjectDb = { host: string; password: string }
 const KEY_FILE = '/etc/postgresql-custom/pgsodium_root.key'
 const SUPERUSER = 'supabase_admin'
 
-function pgEnv(db: ProjectDb, user = SUPERUSER): Record<string, string> {
+export function pgEnv(db: ProjectDb, user = SUPERUSER): Record<string, string> {
   return { PGHOST: db.host, PGPORT: '5432', PGUSER: user, PGPASSWORD: db.password, PGDATABASE: 'postgres', PGCONNECT_TIMEOUT: '10' }
 }
 
@@ -115,25 +115,33 @@ async function snapshot(deps: JobDeps, policy: Policy, id: string, paths: string
   return { snapshotId: summary?.snapshot_id ?? null, sizeBytes: summary?.total_bytes_processed ?? null }
 }
 
-/** Database (with roles and the pgsodium key), Storage files and Studio's settings files of one project. */
-export async function backupProject(deps: JobDeps, project: { ref: string }, db: ProjectDb, policy: Policy) {
+/** roles.sql, postgres.dump and pgsodium_root.key of a database, into `dbDir` (made empty first). */
+export async function dumpDatabase(deps: JobDeps, db: ProjectDb, dbDir: string): Promise<void> {
   const { exec } = deps
-  const base = join(deps.stageDir, project.ref)
-  const dbDir = join(base, 'db')
   await rm(dbDir, { recursive: true, force: true })
   await mkdir(dbDir, { recursive: true, mode: 0o700 })
-  await mkdir(join(base, 'storage'), { recursive: true, mode: 0o700 })
-
   const env = pgEnv(db)
   await must(exec, 'Dump roles', 'pg_dumpall', ['--roles-only', '-f', join(dbDir, 'roles.sql')], { env })
   await must(exec, 'Dump database', 'pg_dump', ['-Fc', '-Z0', '-f', join(dbDir, 'postgres.dump')], { env })
   const key = await must(exec, 'Read pgsodium key', 'psql', ['-At', '-c', `select pg_read_file('${KEY_FILE}')`], { env })
   await writeFile(join(dbDir, 'pgsodium_root.key'), key.stdout.trim(), { mode: 0o600 })
+}
 
-  // Incremental: only new and changed objects are downloaded; the copy here stays for next time.
-  await must(exec, 'Copy Storage files', 'mc', ['mirror', '--overwrite', '--remove', '--quiet', `platform/${project.ref}`, join(base, 'storage')], {
+/** A project's Storage files, into `dir`/<ref>/... (keys start with the ref). Incremental. */
+async function mirrorStorage(deps: JobDeps, ref: string, dir: string): Promise<void> {
+  await must(deps.exec, 'Copy Storage files', 'mc', ['mirror', '--overwrite', '--remove', '--quiet', `platform/${ref}`, dir], {
     env: mcEnv(deps),
   })
+}
+
+/** Database (with roles and the pgsodium key), Storage files and Studio's settings files of one project. */
+export async function backupProject(deps: JobDeps, project: { ref: string }, db: ProjectDb, policy: Policy) {
+  const base = join(deps.stageDir, project.ref)
+  const dbDir = join(base, 'db')
+  await mkdir(join(base, 'storage'), { recursive: true, mode: 0o700 })
+  await dumpDatabase(deps, db, dbDir)
+  // Incremental: only new and changed objects are downloaded; the copy here stays for next time.
+  await mirrorStorage(deps, project.ref, join(base, 'storage'))
 
   const settings = join(deps.projectsHostDir, project.ref)
   const paths = [dbDir, join(base, 'storage'), ...((await exists(settings)) ? [settings] : [])]
@@ -191,74 +199,116 @@ export async function restoreIntoProject(
   target: RestoreTarget,
   workId: string
 ): Promise<string[]> {
-  const { exec } = deps
-  const warnings: string[] = []
   const work = join(deps.stageDir, `restore-${workId}`)
   await rm(work, { recursive: true, force: true })
   await mkdir(work, { recursive: true, mode: 0o700 })
   try {
     const r = await restic(deps, policy, ['restore', snapshotId, '--target', work])
     if (r.code !== 0) throw new Error(`restic restore: ${lastError(r.stderr)}`)
-    const dbDir = join(work, deps.stageDir, sourceRef, 'db')
-    const storageDir = join(work, deps.stageDir, sourceRef, 'storage', sourceRef)
-    const settingsDir = join(work, deps.projectsHostDir, sourceRef)
-    const env = pgEnv(target.db)
-
-    // 1. The encryption key Vault secrets were sealed with, and the settings files; both take
-    //    effect when the stack restarts.
-    const keyFile = join(dbDir, 'pgsodium_root.key')
-    if (await exists(keyFile)) {
-      const key = (await readFile(keyFile, 'utf8')).trim()
-      if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error('The pgsodium key in the backup is not 64 hex characters')
-      const sql = [
-        '\\set ON_ERROR_STOP 1',
-        "select lo_from_bytea(0, convert_to(:'k', 'UTF8')) as o \\gset",
-        `select lo_export(:o, '${KEY_FILE}');`,
-        'select lo_unlink(:o);',
-      ].join('\n')
-      await must(exec, 'Write pgsodium key', 'psql', ['-q', '-At', '-v', `k=${key}`], { env, input: sql })
-    }
-    if (await exists(settingsDir)) {
-      for (const sub of ['gotrue', 'storage', 'state']) {
-        const from = join(settingsDir, sub)
-        if (!(await exists(from))) continue
-        const to = join(deps.projectsHostDir, target.ref, sub)
-        await mkdir(to, { recursive: true })
-        for (const name of await readdir(from)) {
-          const text = await readFile(join(from, name), 'utf8')
-          await writeFile(join(to, name), rewriteProjectRef(text, sourceRef, target.ref, deps.domainSuffix), {
-            mode: sub === 'state' ? 0o600 : 0o644,
-          })
-        }
-      }
-    }
-    await target.restart()
-
-    // 2. Roles the new project lacks (an app's own login, say), then the database.
-    const roles = await must(exec, 'List roles', 'psql', ['-At', '-c', 'select rolname from pg_roles'], { env })
-    const rolesSql = filterRoles(await readFile(join(dbDir, 'roles.sql'), 'utf8'), new Set(roles.stdout.split('\n').filter(Boolean)))
-    if (rolesSql) {
-      const r2 = await exec('psql', ['-q', '-At'], { env, input: rolesSql })
-      for (const line of r2.stderr.split('\n')) if (/ERROR/.test(line)) warnings.push(`roles: ${line.trim().slice(0, 300)}`)
-    }
-    const toc = await must(exec, 'Read dump', 'pg_restore', ['-l', join(dbDir, 'postgres.dump')])
-    const list = join(work, 'restore.list')
-    await writeFile(list, filterToc(toc.stdout), { mode: 0o600 })
-    const restore = await exec('pg_restore', ['--clean', '--if-exists', '-d', 'postgres', '-L', list, join(dbDir, 'postgres.dump')], { env })
-    for (const line of restore.stderr.split('\n')) {
-      const m = /error: (?:could not execute query: )?(.*)/.exec(line)
-      if (m && !benignRestoreError(m[1])) warnings.push(`database: ${m[1].trim().slice(0, 300)}`)
-    }
-    await exec('psql', ['-q', '-c', "notify pgrst, 'reload schema'"], { env })
-
-    // 3. Storage files: keys start with the project's ref (storage-api's TENANT_ID).
-    if (await exists(storageDir)) {
-      await must(exec, 'Copy Storage files back', 'mc', ['mirror', '--overwrite', '--quiet', storageDir, `platform/${target.ref}/${target.ref}`], {
-        env: mcEnv(deps),
-      })
-    }
-    return warnings
+    return await restoreFiles(deps, sourceRef, target, work, {
+      dbDir: join(work, deps.stageDir, sourceRef, 'db'),
+      storageDir: join(work, deps.stageDir, sourceRef, 'storage', sourceRef),
+      settingsDir: join(work, deps.projectsHostDir, sourceRef),
+    })
   } finally {
     await rm(work, { recursive: true, force: true })
   }
+}
+
+/**
+ * Restores `sourceRef`'s database as a read-only copy at a moment shows it (`moment`, from the
+ * runner: src/runner/pitr.ts), with its Storage files and settings as they are now (the WAL has
+ * neither), into `target`, a project just created for it. The source project is never touched.
+ */
+export async function restoreFromMoment(
+  deps: JobDeps,
+  sourceRef: string,
+  moment: ProjectDb,
+  target: RestoreTarget,
+  workId: string
+): Promise<string[]> {
+  const work = join(deps.stageDir, `restore-${workId}`)
+  await rm(work, { recursive: true, force: true })
+  await mkdir(join(work, 'storage'), { recursive: true, mode: 0o700 })
+  try {
+    await dumpDatabase(deps, moment, join(work, 'db'))
+    await mirrorStorage(deps, sourceRef, join(work, 'storage'))
+    return await restoreFiles(deps, sourceRef, target, work, {
+      dbDir: join(work, 'db'),
+      storageDir: join(work, 'storage', sourceRef),
+      settingsDir: join(deps.projectsHostDir, sourceRef),
+    })
+  } finally {
+    await rm(work, { recursive: true, force: true })
+  }
+}
+
+type RestoreFiles = { dbDir: string; storageDir: string; settingsDir: string }
+
+/** The second half of a restore: the files of one project, laid out as a backup has them, into `target`. */
+async function restoreFiles(
+  deps: JobDeps,
+  sourceRef: string,
+  target: RestoreTarget,
+  work: string,
+  { dbDir, storageDir, settingsDir }: RestoreFiles
+): Promise<string[]> {
+  const { exec } = deps
+  const warnings: string[] = []
+  const env = pgEnv(target.db)
+
+  // 1. The encryption key Vault secrets were sealed with, and the settings files; both take
+  //    effect when the stack restarts.
+  const keyFile = join(dbDir, 'pgsodium_root.key')
+  if (await exists(keyFile)) {
+    const key = (await readFile(keyFile, 'utf8')).trim()
+    if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error('The pgsodium key in the backup is not 64 hex characters')
+    const sql = [
+      '\\set ON_ERROR_STOP 1',
+      "select lo_from_bytea(0, convert_to(:'k', 'UTF8')) as o \\gset",
+      `select lo_export(:o, '${KEY_FILE}');`,
+      'select lo_unlink(:o);',
+    ].join('\n')
+    await must(exec, 'Write pgsodium key', 'psql', ['-q', '-At', '-v', `k=${key}`], { env, input: sql })
+  }
+  if (await exists(settingsDir)) {
+    for (const sub of ['gotrue', 'storage', 'state']) {
+      const from = join(settingsDir, sub)
+      if (!(await exists(from))) continue
+      const to = join(deps.projectsHostDir, target.ref, sub)
+      await mkdir(to, { recursive: true })
+      for (const name of await readdir(from)) {
+        const text = await readFile(join(from, name), 'utf8')
+        await writeFile(join(to, name), rewriteProjectRef(text, sourceRef, target.ref, deps.domainSuffix), {
+          mode: sub === 'state' ? 0o600 : 0o644,
+        })
+      }
+    }
+  }
+  await target.restart()
+
+  // 2. Roles the new project lacks (an app's own login, say), then the database.
+  const roles = await must(exec, 'List roles', 'psql', ['-At', '-c', 'select rolname from pg_roles'], { env })
+  const rolesSql = filterRoles(await readFile(join(dbDir, 'roles.sql'), 'utf8'), new Set(roles.stdout.split('\n').filter(Boolean)))
+  if (rolesSql) {
+    const r2 = await exec('psql', ['-q', '-At'], { env, input: rolesSql })
+    for (const line of r2.stderr.split('\n')) if (/ERROR/.test(line)) warnings.push(`roles: ${line.trim().slice(0, 300)}`)
+  }
+  const toc = await must(exec, 'Read dump', 'pg_restore', ['-l', join(dbDir, 'postgres.dump')])
+  const list = join(work, 'restore.list')
+  await writeFile(list, filterToc(toc.stdout), { mode: 0o600 })
+  const restore = await exec('pg_restore', ['--clean', '--if-exists', '-d', 'postgres', '-L', list, join(dbDir, 'postgres.dump')], { env })
+  for (const line of restore.stderr.split('\n')) {
+    const m = /error: (?:could not execute query: )?(.*)/.exec(line)
+    if (m && !benignRestoreError(m[1])) warnings.push(`database: ${m[1].trim().slice(0, 300)}`)
+  }
+  await exec('psql', ['-q', '-c', "notify pgrst, 'reload schema'"], { env })
+
+  // 3. Storage files: keys start with the project's ref (storage-api's TENANT_ID).
+  if (await exists(storageDir)) {
+    await must(exec, 'Copy Storage files back', 'mc', ['mirror', '--overwrite', '--quiet', storageDir, `platform/${target.ref}/${target.ref}`], {
+      env: mcEnv(deps),
+    })
+  }
+  return warnings
 }

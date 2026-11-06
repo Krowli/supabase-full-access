@@ -123,6 +123,13 @@ settings:
 - A run fails on purpose if the bucket has an expiration lifecycle rule.
 - `/health` returns 503 when a backup failed or is overdue, so Coolify shows the
   platform unhealthy. Keep that.
+- Point-in-time recovery (SPEC §22): each project's WAL is encrypted with
+  `HMAC(encryption_key, "wal-g:<ref>")` and kept under `<bucket>/<pitr.prefix>/<ref>`.
+  **Changing that derivation or the folder makes every existing WAL archive
+  unreadable.** The runner only ever writes `wal-g.json` and `wal-g.conf` in the
+  project's config volume; never `archive_mode = off` or an empty
+  `archive_command` while archiving is on (Postgres would keep every WAL file
+  until the disk is full).
 
 ## 6. Connections the apps depend on
 

@@ -9,7 +9,8 @@ function slot(now: Date, schedule: string, dayOffset = 0): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + dayOffset, h, m))
 }
 
-function latestSlot(now: Date, schedule: string): Date {
+/** The latest moment of the daily schedule at or before `now`. */
+export function latestSlot(now: Date, schedule: string): Date {
   const today = slot(now, schedule)
   return today <= now ? today : slot(now, schedule, -1)
 }

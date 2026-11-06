@@ -1,13 +1,36 @@
 // The backup service (deploy/platform/SPEC.md §19): a daily backup of every project and of the
 // platform database, "Back up now" and "Restore into a new project" for Studio, and /health for
-// Coolify. One job runs at a time; the rest wait in a queue.
+// Coolify. One job runs at a time; the rest wait in a queue. Point-in-time recovery (§22) of the
+// projects that have it: settings, a base backup a day, the archive's health, restores at a moment.
 
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 import type { Project, Registry } from '../registry.ts'
-import { parseBackupConfig, PLATFORM_REPOSITORY, resolvePolicy, type BackupConfig, type Policy } from './config.ts'
-import { backupPlatform, backupProject, listSnapshots, removeRepository, restoreIntoProject, type JobDeps, type ProjectDb, type Snapshot } from './jobs.ts'
+import { parseBackupConfig, PLATFORM_REPOSITORY, resolvePolicy, type BackupConfig, type PitrPolicy, type Policy } from './config.ts'
+import {
+  backupPlatform,
+  backupProject,
+  listSnapshots,
+  removeRepository,
+  restoreFromMoment,
+  restoreIntoProject,
+  type JobDeps,
+  type ProjectDb,
+  type Snapshot,
+} from './jobs.ts'
+import {
+  archiveStatus,
+  backupBefore,
+  newPitrState,
+  pitrBackupDue,
+  pitrProblems,
+  pitrView,
+  sealArchive,
+  type PitrRunner,
+  type PitrState,
+} from './pitr.ts'
+import { lifecycleRule } from './s3.ts'
 import { healthProblems, isDue } from './schedule.ts'
 import type { Run, RunKind, RunStore } from './state.ts'
 
@@ -26,10 +49,16 @@ export type ServiceDeps = {
   controlPlane: ControlPlaneClient
   /** Restarts a project's Coolify service; resolves once its database is back. */
   restartStack: (uuid: string, db: ProjectDb) => Promise<void>
+  /** The runner's PITR calls; absent with Coolify as the stack backend (no PITR then). */
+  pitr?: PitrRunner
   apiToken: string
   log: (event: string, fields: Record<string, unknown>) => void
   now?: () => Date
+  sleep?: (ms: number) => Promise<void>
 }
+
+/** How often each project's archive status and base backups are read. */
+const PITR_CHECK_MS = 5 * 60_000
 
 type Job = { run: Run; work: () => Promise<Partial<Run>> }
 
@@ -44,6 +73,7 @@ export class BackupService {
   private configNote: string | undefined
   private snapshots = new Map<string, { at: number; list: Snapshot[] }>()
   private pruning = false
+  private pitrStates = new Map<string, PitrState>()
 
   constructor(deps: ServiceDeps) {
     this.deps = deps
@@ -133,6 +163,132 @@ export class BackupService {
     return run
   }
 
+  /** Restores `ref` as it was at `moment` into a new project (point-in-time recovery). */
+  async enqueuePitrRestore(ref: string, moment: Date, name: string): Promise<Run> {
+    const source = await this.deps.registry.get(ref)
+    if (!source) throw new HttpError(404, 'Project not found')
+    const pitr = this.policy(source)?.pitr
+    const runner = this.deps.pitr
+    if (!pitr || !runner) throw new HttpError(409, 'Point-in-time recovery is not on for this project')
+    if (!this.pitrStates.get(ref)?.archive?.archiveMode)
+      throw new HttpError(409, 'WAL archiving is not on yet: the database waits for a restart')
+    if (moment.getTime() >= this.now().getTime()) throw new HttpError(400, 'The moment must be in the past')
+    const stack = source.coolify_service_uuid!
+    const backups = await runner.backups(stack)
+    const base = backupBefore(backups, moment)
+    if (!base)
+      throw new HttpError(400, backups.length ? `The earliest moment is ${backups[0].finish_time}` : 'No base backup yet')
+    const at = moment.toISOString()
+    const run = await this.deps.runs.insert({ ref, kind: 'restore', destination: pitr.destinationName })
+    this.push({
+      run,
+      work: async () => {
+        const sourceDb = await this.projectDb(source)
+        await sealArchive(this.deps.jobs.exec, sourceDb, this.sleep)
+        await this.deps.runs.update(run.id, { snapshot_id: base.name })
+        const host = await runner.startScratch(stack, base.name, at)
+        try {
+          const targetRef = await this.deps.controlPlane.createProject(name)
+          await this.deps.runs.update(run.id, { target_ref: targetRef })
+          await this.deps.controlPlane.waitActive(targetRef)
+          const target = await this.deps.registry.get(targetRef)
+          if (!target?.coolify_service_uuid) throw new Error(`New project ${targetRef} has no stack`)
+          const db = await this.projectDb(target)
+          const warnings = await restoreFromMoment(
+            this.deps.jobs,
+            ref,
+            { host, password: sourceDb.password },
+            { ref: targetRef, db, restart: () => this.deps.restartStack(target.coolify_service_uuid!, db) },
+            String(run.id)
+          )
+          warnings.unshift(`The database as it was at ${at}; Storage files and settings as they are now.`)
+          return { target_ref: targetRef, warnings: warnings.join('\n').slice(0, 4000) }
+        } finally {
+          await runner.dropScratch(stack).catch((err: unknown) =>
+            this.deps.log('pitr.scratch_remove_failed', { ref, error: String(err).slice(0, 300) })
+          )
+        }
+      },
+    })
+    return run
+  }
+
+  private sleep = (ms: number) => (this.deps.sleep ?? ((t: number) => new Promise((r) => setTimeout(r, t))))(ms)
+
+  private pitrState(ref: string): PitrState {
+    let s = this.pitrStates.get(ref)
+    if (!s) this.pitrStates.set(ref, (s = newPitrState()))
+    return s
+  }
+
+  /** Settings into the database, its archive status and base backups; then today's base backup if due. */
+  private async pitrTick(config: BackupConfig, projects: Project[], now: Date): Promise<void> {
+    const live = new Set<string>()
+    for (const p of projects) {
+      const { pitr, schedule } = resolvePolicy(config, p)
+      if (!pitr || !p.coolify_service_uuid) continue
+      live.add(p.ref)
+      const s = this.pitrState(p.ref)
+      if (s.busy) continue
+      if (!this.deps.pitr) {
+        s.refreshError = 'needs the runner (STACK_BACKEND=runner)'
+        continue
+      }
+      if (!s.checkedAt || now.getTime() - s.checkedAt.getTime() >= PITR_CHECK_MS) await this.refreshPitr(p, pitr, s, now)
+      if (pitrBackupDue(now, schedule, s)) void this.pitrBackup(p, pitr, s)
+    }
+    for (const ref of this.pitrStates.keys()) if (!live.has(ref)) this.pitrStates.delete(ref)
+  }
+
+  private async refreshPitr(p: Project, pitr: PitrPolicy, s: PitrState, now: Date): Promise<void> {
+    const runner = this.deps.pitr!
+    const stack = p.coolify_service_uuid!
+    try {
+      const hash = createHash('sha256').update(JSON.stringify(pitr.settings)).digest('hex')
+      if (s.configured !== hash) {
+        await runner.configure(stack, pitr.settings)
+        s.configured = hash
+        this.deps.log('pitr.configured', { ref: p.ref })
+      }
+      s.archive = await archiveStatus(this.deps.jobs.exec, await this.projectDb(p))
+      if (s.archive.archiveMode) {
+        s.archiveOnSince ??= now
+        s.backups = await runner.backups(stack)
+      }
+      s.refreshError = null
+    } catch (err) {
+      s.refreshError = String((err as Error).message ?? err).slice(0, 300)
+      this.deps.log('pitr.check_failed', { ref: p.ref, error: s.refreshError })
+    }
+    s.checkedAt = now
+  }
+
+  private async pitrBackup(p: Project, pitr: PitrPolicy, s: PitrState): Promise<void> {
+    s.busy = true
+    s.lastAttempt = this.now()
+    this.deps.log('pitr.backup_started', { ref: p.ref })
+    try {
+      s.backups = await this.deps.pitr!.backup(p.coolify_service_uuid!, pitr.keepFull)
+      // A rule that deletes old objects would cut the WAL a base backup needs, as it would restic's.
+      const newest = s.backups.at(-1)
+      const rule = newest
+        ? await lifecycleRule(pitr.location, `${p.ref}/basebackups_005/${newest.name}_backup_stop_sentinel.json`).catch((err: unknown) => {
+            this.deps.log('pitr.lifecycle_check_failed', { ref: p.ref, error: String(err).slice(0, 200) })
+            return null
+          })
+        : null
+      if (rule)
+        throw new Error(`Destination ${pitr.destinationName} deletes old files (lifecycle rule "${rule}"), which would break restores. Use a bucket or prefix without such a rule.`)
+      s.backupError = null
+      this.deps.log('pitr.backup_succeeded', { ref: p.ref, backups: s.backups.length })
+    } catch (err) {
+      s.backupError = String((err as Error).message ?? err).slice(0, 300)
+      this.deps.log('pitr.backup_failed', { ref: p.ref, error: s.backupError })
+    } finally {
+      s.busy = false
+    }
+  }
+
   private push(job: Job) {
     this.queue.push(job)
     void this.drain()
@@ -175,6 +331,7 @@ export class BackupService {
       const { lastScheduledStart } = await this.deps.runs.summary(p.ref)
       if (isDue(now, policy.schedule, lastScheduledStart)) await this.enqueueBackup(p.ref, 'scheduled')
     }
+    await this.pitrTick(config, projects, now)
     await this.pruneDeleted(config, now)
   }
 
@@ -199,6 +356,9 @@ export class BackupService {
         if (!target) continue
         try {
           await removeRepository(this.deps.jobs, target, d.ref)
+          // Its WAL and base backups too, when PITR is configured (nothing there is fine).
+          if (config.pitr)
+            await removeRepository(this.deps.jobs, { ...config.destinations[config.pitr.destination], prefix: config.pitr.prefix }, d.ref)
           await runs.markRemoved(d.ref, now)
           this.snapshots.delete(d.ref)
           this.deps.log('backup.deleted_project_removed', { ref: d.ref, destination: d.destination })
@@ -219,6 +379,12 @@ export class BackupService {
     const config = this.config!
     const projects = (await this.deps.registry.list()).filter((p) => p.status === 'ACTIVE_HEALTHY')
     const items = []
+    const pitr: string[] = []
+    for (const p of projects) {
+      const { pitr: on, schedule } = resolvePolicy(config, p)
+      const s = this.pitrStates.get(p.ref)
+      if (on && s) pitr.push(...pitrProblems(this.now(), p.name, schedule, s))
+    }
     for (const p of [{ ref: PLATFORM_REPOSITORY, name: 'platform', created_at: new Date(0) }, ...projects]) {
       const policy = resolvePolicy(config, p)
       if (!policy.enabled) continue
@@ -235,7 +401,7 @@ export class BackupService {
         },
       })
     }
-    return healthProblems(this.now(), items)
+    return [...healthProblems(this.now(), items), ...pitr]
   }
 
   private async snapshotList(ref: string, policy: Policy, fresh = false): Promise<Snapshot[]> {
@@ -258,6 +424,7 @@ export class BackupService {
       config_note: this.configNote ?? null,
       deleted_project_retention_days: this.config?.deleted_project_retention_days ?? null,
       runs,
+      pitr: policy?.pitr ? pitrView(this.now(), this.pitrStates.get(ref)) : null,
     }
     if (!policy) return { ...base, enabled: false, destination: null, schedule: null, keep: null, snapshots: [], snapshots_error: null }
     let snapshots: Snapshot[] = []
@@ -305,6 +472,13 @@ export class BackupService {
     if (action === 'backups' && method === 'POST') return send(res, 202, await this.enqueueBackup(ref, 'manual'))
     if (action === 'restore' && method === 'POST') {
       const body = await readJson(req)
+      if (body.target_time !== undefined) {
+        const at = typeof body.target_time === 'string' ? new Date(body.target_time) : new Date(NaN)
+        const name = typeof body.name === 'string' ? body.name.trim() : ''
+        if (Number.isNaN(at.getTime())) throw new HttpError(400, 'target_time must be a date and time (ISO 8601)')
+        if (!name || name.length > 64) throw new HttpError(400, 'name is required (1-64 chars)')
+        return send(res, 202, await this.enqueuePitrRestore(ref, at, name))
+      }
       const snapshotId = typeof body.snapshot_id === 'string' ? body.snapshot_id : ''
       const name = typeof body.name === 'string' ? body.name.trim() : ''
       if (!/^[0-9a-f]{8,64}$/.test(snapshotId)) throw new HttpError(400, 'snapshot_id is required')

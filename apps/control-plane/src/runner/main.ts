@@ -10,6 +10,7 @@ import { resolve } from 'node:path'
 
 import { loadTemplate, renderTemplate, templateValues } from '../template.ts'
 import { createDocker } from './docker.ts'
+import { Pitr } from './pitr.ts'
 import { createRunnerServer } from './server.ts'
 import { buildStack, STACK_ENV_KEYS } from './stack.ts'
 import { Stacks } from './stacks.ts'
@@ -37,12 +38,9 @@ const template = loadTemplate(
 const render = (r: string) => renderTemplate(template, templateValues(r, domainSuffix, shared, projectsHostDir))
 const log = (event: string, fields: Record<string, unknown>) =>
   console.log(JSON.stringify({ time: new Date().toISOString(), event, ...fields }))
-const stacks = new Stacks({
-  dir: env.RUNNER_STACKS_DIR ?? '/data/supa-runner/stacks',
-  sharedNetwork: env.RUNNER_SHARED_NETWORK ?? 'coolify',
-  render,
-  docker: createDocker(),
-})
+const docker = createDocker()
+const sharedNetwork = env.RUNNER_SHARED_NETWORK ?? 'coolify'
+const stacks = new Stacks({ dir: env.RUNNER_STACKS_DIR ?? '/data/supa-runner/stacks', sharedNetwork, render, docker })
 
 if (command === 'render') {
   process.stdout.write(buildStack(render(ref), id).compose)
@@ -65,7 +63,7 @@ if (command === 'render') {
   const state = await stacks.get(got)
   log('stack.status', { id: got, status: state?.status })
 } else if (command === 'serve') {
-  const server = createRunnerServer({ stacks, token, log })
+  const server = createRunnerServer({ stacks, pitr: new Pitr({ stacks, docker, sharedNetwork }), token, log })
   const port = Number(env.RUNNER_PORT ?? 8080)
   server.listen(port, () => log('runner.listening', { port }))
   for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => server.close(() => process.exit(0)))

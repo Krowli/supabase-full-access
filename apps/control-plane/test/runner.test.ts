@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Provisioner } from '../src/provisioner.ts'
 import { createRunnerClient } from '../src/runner-client.ts'
+import { Pitr } from '../src/runner/pitr.ts'
 import { createRunnerServer } from '../src/runner/server.ts'
 import { Stacks, stackStatus, type Docker } from '../src/runner/stacks.ts'
 import { loadTemplate, renderTemplate, serviceEnvs, templateValues } from '../src/template.ts'
@@ -62,6 +63,35 @@ class FakeDocker implements Docker {
   }
   async projectHasContainers(id: string) {
     return this.existingProjects.has(id)
+  }
+  execs: { container: string; user: string; args: string[]; input?: string }[] = []
+  /** What `docker exec` prints, by container and arguments. */
+  answer: (container: string, args: string[]) => string = () => ''
+  runs: string[][] = []
+  removed: string[] = []
+  scratchRunning = true
+  async exec(container: string, user: string, args: string[], input?: string) {
+    this.execs.push({ container, user, args, input })
+    return this.answer(container, args)
+  }
+  signals: string[] = []
+  async signal(container: string, signal: string) {
+    this.signals.push(`${signal} ${container}`)
+  }
+  async imageOf() {
+    return 'supabase/postgres:15.8.1.085'
+  }
+  async run(args: string[]) {
+    this.runs.push(args)
+  }
+  async remove(container: string, volumes: string[]) {
+    this.removed.push(container, ...volumes)
+  }
+  async running() {
+    return this.scratchRunning
+  }
+  async logs() {
+    return 'FATAL:  recovery ended before configured recovery target was reached\n'
   }
 }
 
@@ -156,7 +186,8 @@ describe('runner API and the control plane over it', () => {
   let close: () => void
 
   beforeEach(async () => {
-    const server = createRunnerServer({ stacks, token })
+    const pitr = new Pitr({ stacks, docker, sharedNetwork: 'shared-net', sleep: async () => {} })
+    const server = createRunnerServer({ stacks, pitr, token })
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     close = () => server.close()
@@ -186,7 +217,8 @@ describe('runner API and the control plane over it', () => {
   })
 
   it('refuses a short token', () => {
-    expect(() => createRunnerServer({ stacks, token: 'short' })).toThrow(/at least 32/)
+    const pitr = new Pitr({ stacks, docker, sharedNetwork: 'shared-net' })
+    expect(() => createRunnerServer({ stacks, pitr, token: 'short' })).toThrow(/at least 32/)
   })
 
   it('takes a project from create to ACTIVE_HEALTHY, then deletes it', async () => {
@@ -214,5 +246,149 @@ describe('runner API and the control plane over it', () => {
     await provisioner.delete(project.ref)
     expect(await registry.get(project.ref)).toBeNull()
     expect(docker.calls).toContain(`compose ${id} down --volumes --remove-orphans`)
+  })
+})
+
+describe('point-in-time recovery of a stack database', () => {
+  const SETTINGS = {
+    prefix: 's3://backups/pitr/qwertyuiopasdfghjklz',
+    endpoint: 'https://s3.example.com',
+    region: 'auto',
+    access_key_id: 'AKIDEXAMPLE',
+    secret_access_key: 'secretEXAMPLE+/=',
+    libsodium_key: 'ab'.repeat(32),
+  }
+  const LIST = JSON.stringify([
+    { backup_name: 'base_000000010000000000000009', start_time: '2026-11-06T02:30:01Z', finish_time: '2026-11-06T02:30:09Z', compressed_size: 10 },
+    { backup_name: 'base_000000010000000000000002', start_time: '2026-11-05T02:30:01Z', finish_time: '2026-11-05T02:30:08Z', compressed_size: 9 },
+  ])
+  let pitr: Pitr
+  let id: string
+
+  beforeEach(async () => {
+    pitr = new Pitr({ stacks, docker, sharedNetwork: 'shared-net', sleep: async () => {}, scratchTimeoutMs: 60_000 })
+    id = await stacks.create(REF, 'Demo')
+  })
+
+  it("writes wal-g's files into the config volume as postgres, then reloads Postgres", async () => {
+    await pitr.configure(id, SETTINGS)
+    const [json, conf] = docker.execs
+    expect(json).toMatchObject({ container: `supabase-db-${id}`, user: 'postgres' })
+    expect(json.args.join(' ')).toContain('cat > /etc/postgresql-custom/wal-g.json.tmp && chmod 600')
+    expect(JSON.parse(json.input!)).toMatchObject({
+      WALG_S3_PREFIX: SETTINGS.prefix,
+      AWS_ENDPOINT: SETTINGS.endpoint,
+      AWS_S3_FORCE_PATH_STYLE: 'true',
+      WALG_LIBSODIUM_KEY: SETTINGS.libsodium_key,
+      WALG_LIBSODIUM_KEY_TRANSFORM: 'hex',
+      PGHOST: '127.0.0.1',
+    })
+    expect(conf.args.join(' ')).toContain('/etc/postgresql-custom/wal-g.conf')
+    expect(conf.input).toContain('archive_mode = on')
+    expect(conf.input).toContain(`archive_command = '/usr/local/bin/wal-g wal-push "%p" --config /etc/postgresql-custom/wal-g.json'`)
+    expect(conf.input).toContain('archive_timeout = 60')
+    expect(docker.signals).toEqual([`HUP supabase-db-${id}`])
+  })
+
+  it('turns PITR off without leaving Postgres to keep every WAL file, and drops the keys', async () => {
+    await pitr.disable(id)
+    const [conf, rm] = docker.execs
+    expect(conf.input).toContain('archive_mode = off')
+    expect(conf.input).toContain("archive_command = '/bin/true'")
+    expect(rm.args).toEqual(['rm', '-f', '/etc/postgresql-custom/wal-g.json'])
+    expect(docker.signals).toEqual([`HUP supabase-db-${id}`])
+  })
+
+  it('refuses settings that are not what wal-g expects, and unknown stacks', async () => {
+    for (const bad of [
+      { ...SETTINGS, prefix: 's3://backups/../other' },
+      { ...SETTINGS, endpoint: 'https://s3.example.com/x y' },
+      { ...SETTINGS, libsodium_key: 'short' },
+      { ...SETTINGS, secret_access_key: "a'b" },
+      { ...SETTINGS, region: undefined },
+    ])
+      await expect(pitr.configure(id, bad)).rejects.toThrow(/wal-g setting/)
+    await expect(pitr.configure('a'.repeat(24), SETTINGS)).rejects.toThrow(/No stack/)
+    expect(docker.execs).toEqual([])
+  })
+
+  it('pushes a base backup, keeps the newest ones and lists them oldest first', async () => {
+    docker.answer = (_c, args) => (args.includes('backup-list') ? LIST : '')
+    const backups = await pitr.backup(id, 7)
+    expect(docker.execs.map((e) => e.args.slice(1, 5).join(' '))).toEqual([
+      'backup-push /var/lib/postgresql/data --config /etc/postgresql-custom/wal-g.json',
+      'delete retain FULL 7',
+      'backup-list --json --detail --config',
+    ])
+    expect(backups.map((b) => b.name)).toEqual(['base_000000010000000000000002', 'base_000000010000000000000009'])
+    await expect(pitr.backup(id, 0)).rejects.toThrow(/keep_full/)
+  })
+
+  it('reads "No backups found" as an empty list', async () => {
+    expect(await pitr.backups(id)).toEqual([])
+  })
+
+  it('starts a read-only copy at a moment and waits until it has paused there', async () => {
+    let polls = 0
+    docker.answer = (container) => (container === `pitr-${id}` ? (++polls < 3 ? 'truereplaying' : 'truepaused') : '')
+    const host = await pitr.startScratch(id, 'base_000000010000000000000009', '2026-11-06T10:15:00.000Z')
+    expect(host).toBe(`pitr-${id}`)
+    expect(docker.removed.slice(0, 2)).toEqual([`pitr-${id}`, `pitr-${id}-data`])
+    const args = docker.runs[0].join(' ')
+    expect(args).toContain('--network shared-net')
+    expect(args).toContain(`-v ${id}_supabase-db-config:/etc/postgresql-custom:ro`)
+    expect(args).toContain(`-v pitr-${id}-data:/var/lib/postgresql/data`)
+    expect(args).toContain('-e PITR_TARGET=2026-11-06T10:15:00.000Z')
+    expect(args).toContain('supabase/postgres:15.8.1.085 -c')
+    const script = docker.runs[0].at(-1)!
+    expect(script).toContain('-c archive_mode=off')
+    expect(script).toContain('-c recovery_target_action=pause')
+    expect(script).toContain('-c hot_standby=on')
+    expect(polls).toBe(3)
+  })
+
+  it('reports a copy that stopped (the moment is past the archive) and removes it', async () => {
+    docker.scratchRunning = false
+    await expect(pitr.startScratch(id, 'base_000000010000000000000009', '2026-11-06T10:15:00Z')).rejects.toThrow(
+      /stopped: FATAL: +recovery ended before configured recovery target/
+    )
+    expect(docker.removed.filter((r) => r === `pitr-${id}`)).toHaveLength(2)
+  })
+
+  it('refuses a malformed backup name or moment', async () => {
+    await expect(pitr.startScratch(id, 'base_x; rm -rf /', '2026-11-06T10:15:00Z')).rejects.toThrow(/backup name/)
+    await expect(pitr.startScratch(id, 'base_000000010000000000000009', '2026-11-06 10:15')).rejects.toThrow(/target time/)
+    expect(docker.runs).toEqual([])
+  })
+
+  it('serves all of it over the API, behind the token', async () => {
+    const token = 'y'.repeat(40)
+    const server = createRunnerServer({ stacks, pitr, token })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/stacks/${id}`
+    const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    try {
+      expect((await fetch(`${url}/wal-g/backups`)).status).toBe(401)
+      const put = await fetch(`${url}/wal-g`, { method: 'PUT', headers: auth, body: JSON.stringify({ settings: SETTINGS }) })
+      expect(put.status).toBe(204)
+      const bad = await fetch(`${url}/wal-g`, { method: 'PUT', headers: auth, body: JSON.stringify({ settings: {} }) })
+      expect(bad.status).toBe(400)
+      docker.answer = (container, args) =>
+        container === `pitr-${id}` ? 'truepaused' : args.includes('backup-list') ? LIST : ''
+      const pushed = await fetch(`${url}/wal-g/backup`, { method: 'POST', headers: auth, body: JSON.stringify({ keep_full: 7 }) })
+      expect((await pushed.json()).backups).toHaveLength(2)
+      expect((await (await fetch(`${url}/wal-g/backups`, { headers: auth })).json()).backups).toHaveLength(2)
+      const scratch = await fetch(`${url}/pitr-scratch`, {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({ backup: 'base_000000010000000000000009', target_time: '2026-11-06T10:15:00Z' }),
+      })
+      expect(await scratch.json()).toEqual({ host: `pitr-${id}` })
+      expect((await fetch(`${url}/pitr-scratch`, { method: 'DELETE', headers: auth })).status).toBe(204)
+      expect((await fetch(`${url}/wal-g`, { method: 'DELETE', headers: auth })).status).toBe(204)
+      expect((await fetch(`${url}/wal-g/anything`, { method: 'POST', headers: auth })).status).toBe(404)
+    } finally {
+      server.close()
+    }
   })
 })
