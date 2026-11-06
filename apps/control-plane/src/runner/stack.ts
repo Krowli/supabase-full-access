@@ -44,7 +44,15 @@ export type StackFiles = {
  * `supabase-db` would answer to the same name. The runner attaches each container itself, under its
  * full name only (Coolify does the same).
  */
-export function buildStack(rendered: string, id: string): StackFiles {
+/** What makes one stack differ from the template: src/runner/stacks.ts reads it from meta.json. */
+export type StackOptions = {
+  /** The database image, for a stack made on another Postgres major than the template's. */
+  postgresImage?: string
+  /** Whether the stack runs Edge Functions (services marked `x-platform-only-with: functions`). */
+  functions?: boolean
+}
+
+export function buildStack(rendered: string, id: string, options: StackOptions = {}): StackFiles {
   if (!STACK_ID.test(id)) throw new StackInputError(`Invalid stack id ${id}`)
   const doc = parseDocument(rendered)
   const services = doc.get('services')
@@ -54,10 +62,20 @@ export function buildStack(rendered: string, id: string): StackFiles {
   const files: StackFiles['files'] = []
   const containers: string[] = []
 
-  for (const pair of services.items) {
+  for (const pair of [...services.items]) {
     const name = String(pair.key)
     const svc = pair.value as YAMLMap
     if (!isMap(svc)) throw new Error(`Service ${name} is not a mapping`)
+    const onlyWith = svc.get('x-platform-only-with')
+    if (onlyWith !== undefined) {
+      if (onlyWith !== 'functions') throw new Error(`Service ${name}: unknown x-platform-only-with`)
+      if (!options.functions) {
+        services.delete(pair.key)
+        continue
+      }
+      svc.delete('x-platform-only-with')
+    }
+    if (name === 'supabase-db' && options.postgresImage) svc.set('image', options.postgresImage)
     svc.delete('exclude_from_hc')
     svc.delete('container_name')
     svc.delete('networks')

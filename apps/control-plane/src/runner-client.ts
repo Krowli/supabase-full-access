@@ -56,8 +56,12 @@ export function createRunnerClient(config: RunnerConfig): Coolify {
         (await call<{ id: string }>('GET', `/stacks?ref=${encodeURIComponent(name)}`))?.id ?? null
       )
     },
-    async createService(name, description) {
-      const res = await call<{ id: string }>('POST', '/stacks', { ref: name, name: description })
+    async createService(name, description, _compose, options) {
+      const res = await call<{ id: string }>('POST', '/stacks', {
+        ref: name,
+        name: description,
+        ...(options?.postgres ? { postgres: options.postgres } : {}),
+      })
       if (!res?.id) throw new RunnerError('Runner POST /stacks returned no id', 0)
       return res.id
     },
@@ -80,6 +84,25 @@ export function createRunnerClient(config: RunnerConfig): Coolify {
     },
     async deleteService(uuid) {
       await call('DELETE', stack(uuid), undefined, long)
+    },
+    // Bodies carry the functions' code and secrets: never logged.
+    functions: {
+      async deploy(uuid, bundle) {
+        const res = await call<{ functions: string[] }>('PUT', `${stack(uuid)}/functions`, bundle, long)
+        if (!res) throw new RunnerError(`Runner has no stack ${uuid}`, 404)
+        return res.functions
+      },
+      async get(uuid) {
+        return await call('GET', `${stack(uuid)}/functions`)
+      },
+      async remove(uuid) {
+        await call('DELETE', `${stack(uuid)}/functions`)
+      },
+      async setSecrets(uuid, secrets) {
+        const res = await call<{ secrets: string[] }>('PUT', `${stack(uuid)}/functions/secrets`, { secrets }, long)
+        if (!res) throw new RunnerError(`Runner has no stack ${uuid}`, 404)
+        return res.secrets
+      },
     },
   }
 }

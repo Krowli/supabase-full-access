@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 
 import { Provisioner } from '../src/provisioner.ts'
 import { createRunnerClient } from '../src/runner-client.ts'
@@ -217,6 +218,160 @@ describe('Stacks', () => {
   })
 })
 
+const PG17 = 'registry.example/postgres:17.6.1.136-walg3.0.5'
+const MAIN_DIR = resolve(import.meta.dirname, '../../../deploy/platform/functions-main')
+const withOptions = () =>
+  new Stacks({
+    dir,
+    sharedNetwork: 'shared-net',
+    render,
+    docker,
+    postgres17Image: PG17,
+    functionsMainDir: MAIN_DIR,
+  })
+const composeOf = async (id: string) => parse(await readFile(join(dir, id, 'compose.yaml'), 'utf8'))
+
+describe('Postgres major per stack', () => {
+  it('runs a stack made on 17 on the 17 image, and one made before (no field) on the template 15', async () => {
+    const s = withOptions()
+    const old = await s.create(REF, 'Old')
+    const pg17 = await s.create('asdfghjklzxcvbnmqwer', 'New', undefined, '17')
+    for (const id of [old, pg17]) {
+      await s.setEnvs(id, ENVS)
+      await s.start(id)
+    }
+    expect(JSON.parse(await readFile(join(dir, pg17, 'meta.json'), 'utf8')).postgres).toBe('17')
+    expect(JSON.parse(await readFile(join(dir, old, 'meta.json'), 'utf8')).postgres).toBeUndefined()
+    expect((await composeOf(pg17)).services['supabase-db'].image).toBe(PG17)
+    expect((await composeOf(old)).services['supabase-db'].image).toBe('supabase/postgres:15.8.1.085')
+    expect((await s.get(pg17))?.postgres).toBe('17')
+  })
+
+  it('refuses 17 without an image, unknown majors, and 17 for a stack taken over from Coolify', async () => {
+    await expect(stacks.create(REF, 'x', undefined, '17')).rejects.toThrow(/no Postgres 17 image/)
+    await expect(withOptions().create(REF, 'x', undefined, '16')).rejects.toThrow(/not one of 15, 17/)
+    docker.existingProjects.add('madebycoolify0000000001x')
+    await expect(withOptions().create(REF, 'x', 'madebycoolify0000000001x', '17')).rejects.toThrow(
+      /runs Postgres 15/
+    )
+  })
+
+  it('never starts a 17 stack on the 15 image when the runner lost its 17 image', async () => {
+    const id = await withOptions().create(REF, 'New', undefined, '17')
+    await stacks.setEnvs(id, ENVS)
+    await expect(stacks.start(id)).rejects.toThrow(/runs Postgres 17 and this runner has no image/)
+    expect(docker.calls.some((c) => c.includes(' up '))).toBe(false)
+  })
+})
+
+describe('Edge Functions of a stack', () => {
+  const bundle = {
+    files: {
+      'admin-users/index.ts': "Deno.serve(() => new Response('users'))",
+      'admin-revenue/index.ts': "import { x } from '../_shared/db.ts'",
+      'admin-revenue/deno.json': '{}',
+      '_shared/db.ts': 'export const x = 1',
+    },
+    verify_jwt: { 'admin-users': false },
+  }
+
+  it('leaves the functions container out until functions are deployed', async () => {
+    const s = withOptions()
+    const id = await s.create(REF, 'Demo')
+    await s.setEnvs(id, ENVS)
+    await s.start(id)
+    expect(Object.keys((await composeOf(id)).services)).not.toContain('supabase-functions')
+    expect(await s.functions(id)).toEqual({ enabled: false, functions: [], verify_jwt: {}, secrets: [] })
+  })
+
+  it('writes the functions whole, with verify_jwt and the router, and (re)starts only their container', async () => {
+    const s = withOptions()
+    const id = await s.create(REF, 'Demo')
+    await s.setEnvs(id, ENVS)
+    await s.start(id)
+    docker.calls = []
+    docker.attached = []
+    expect(await s.deployFunctions(id, bundle)).toEqual(['admin-revenue', 'admin-users'])
+    expect(docker.calls).toEqual([
+      `network ensure ${id}`,
+      `compose ${id} up --no-start --no-deps supabase-functions`,
+      `compose ${id} up -d --no-deps supabase-functions`,
+      `compose ${id} restart supabase-functions`,
+    ])
+    expect(docker.attached).toEqual([
+      [`supabase-functions-${id}`, 'shared-net', `supabase-functions-${id}`],
+    ])
+    const svc = (await composeOf(id)).services['supabase-functions']
+    expect(svc.container_name).toBe(`supabase-functions-${id}`)
+    expect(svc['x-platform-only-with']).toBeUndefined()
+    expect(svc.environment).toContain('SUPABASE_URL=https://' + REF + '.supa.example.com')
+    expect(await readFile(join(dir, id, 'functions/_shared/db.ts'), 'utf8')).toBe('export const x = 1')
+    expect(JSON.parse(await readFile(join(dir, id, 'functions/.platform.json'), 'utf8'))).toEqual({
+      verify_jwt: { 'admin-users': false },
+    })
+    expect(await readFile(join(dir, id, 'functions-main/index.ts'), 'utf8')).toContain('verifyJwtFor')
+
+    // A second deploy replaces the folder: a function left out is gone.
+    await s.deployFunctions(id, { files: { 'admin-users/index.ts': 'v2' } })
+    expect(existsSync(join(dir, id, 'functions/admin-revenue'))).toBe(false)
+    expect(await s.functions(id)).toMatchObject({ enabled: true, functions: ['admin-users'], verify_jwt: {} })
+    // A restart of the whole stack keeps the functions container.
+    await s.restart(id)
+    expect(Object.keys((await composeOf(id)).services)).toContain('supabase-functions')
+  })
+
+  it('keeps secrets in a file only root reads, gives back their names, and refuses reserved ones', async () => {
+    const s = withOptions()
+    const id = await s.create(REF, 'Demo')
+    await s.setEnvs(id, ENVS)
+    expect(await s.setFunctionSecrets(id, { STRIPE_SECRET_KEY: 'sk_live_x', GMAIL_CLIENT_ID: 'a=b' })).toEqual([
+      'GMAIL_CLIENT_ID',
+      'STRIPE_SECRET_KEY',
+    ])
+    const file = join(dir, id, 'functions.env')
+    expect((await stat(file)).mode & 0o777).toBe(0o600)
+    expect(await readFile(file, 'utf8')).toBe('STRIPE_SECRET_KEY=sk_live_x\nGMAIL_CLIENT_ID=a=b\n')
+    expect(docker.calls).toEqual([]) // no functions yet: nothing to restart
+    expect((await s.functions(id)).secrets).toEqual(['GMAIL_CLIENT_ID', 'STRIPE_SECRET_KEY'])
+    for (const bad of [{ SUPABASE_URL: 'x' }, { JWT_SECRET: 'x' }, { 'A-B': 'x' }, { A: 'two\nlines' }, { A: 1 }])
+      await expect(s.setFunctionSecrets(id, bad)).rejects.toThrow()
+  })
+
+  it('refuses paths out of the folder, bundles without a function, and verify_jwt for others', async () => {
+    const s = withOptions()
+    const id = await s.create(REF, 'Demo')
+    for (const files of [
+      { '../x/index.ts': 'x' },
+      { 'a/../../x.ts': 'x' },
+      { '/etc/passwd': 'x' },
+      { 'a/.env': 'x' },
+      { '_shared/db.ts': 'x' },
+      { 'index.ts': 'x' },
+      {},
+    ])
+      await expect(s.deployFunctions(id, { files })).rejects.toThrow()
+    await expect(
+      s.deployFunctions(id, { files: { 'a/index.ts': 'x' }, verify_jwt: { b: false } })
+    ).rejects.toThrow(/not a function here/)
+    expect(existsSync(join(dir, id, 'functions'))).toBe(false)
+  })
+
+  it('turns functions off: container, files, secrets and the compose service go', async () => {
+    const s = withOptions()
+    const id = await s.create(REF, 'Demo')
+    await s.setEnvs(id, ENVS)
+    await s.start(id)
+    await s.deployFunctions(id, bundle)
+    await s.setFunctionSecrets(id, { A: 'b' })
+    await s.removeFunctions(id)
+    expect(docker.removed).toContain(`supabase-functions-${id}`)
+    for (const name of ['functions', 'functions-main', 'functions.env'])
+      expect(existsSync(join(dir, id, name))).toBe(false)
+    expect(Object.keys((await composeOf(id)).services)).not.toContain('supabase-functions')
+    expect(await s.functions(id)).toEqual({ enabled: false, functions: [], verify_jwt: {}, secrets: [] })
+  })
+})
+
 describe('runner API and the control plane over it', () => {
   const token = 'x'.repeat(40)
   let url: string
@@ -304,6 +459,66 @@ describe('runner API and the control plane over it', () => {
     await provisioner.delete(project.ref)
     expect(await registry.get(project.ref)).toBeNull()
     expect(docker.calls).toContain(`compose ${id} down --volumes --remove-orphans`)
+  })
+})
+
+describe('a Postgres 17 project with Edge Functions, control plane to runner over HTTP', () => {
+  const token = 'y'.repeat(40)
+  it('makes it on 17, deploys functions and their secrets, routes them, and turns them off', async () => {
+    const s = withOptions()
+    const pitr = new Pitr({ stacks: s, docker, sharedNetwork: 'shared-net' })
+    const server = createRunnerServer({ stacks: s, pitr, token })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    try {
+      const registry = new MemoryRegistry()
+      const shared = fakeShared(registry)
+      const provisioner = new Provisioner({
+        registry,
+        coolify: createRunnerClient({ url, token }),
+        ...shared,
+        renderCompose: () => '',
+        serviceEnvs,
+        healthTimeoutMs: 60_000,
+        pollIntervalMs: 0,
+        sleep: async () => {},
+        newProjectPostgres: '17',
+      })
+      const { project, done } = await provisioner.create('Shop')
+      await done
+      const p = (await registry.get(project.ref))!
+      expect(p).toMatchObject({ status: 'ACTIVE_HEALTHY', postgres_version: '17', functions: false })
+      const id = p.coolify_service_uuid!
+      expect((await composeOf(id)).services['supabase-db'].image).toBe(PG17)
+
+      // A bad bundle comes back as the runner's 400, with its reason.
+      await expect(provisioner.deployFunctions(p.ref, { files: { '../x': 'y' } })).rejects.toThrow(
+        /400.*Invalid file path/
+      )
+      expect(
+        await provisioner.deployFunctions(p.ref, {
+          files: { 'hello/index.ts': 'Deno.serve(() => new Response("hi"))' },
+          verify_jwt: { hello: false },
+        })
+      ).toEqual(['hello'])
+      expect((await registry.get(p.ref))!.functions).toBe(true)
+      expect(Object.keys((await composeOf(id)).services)).toContain('supabase-functions')
+      expect(await provisioner.setFunctionSecrets(p.ref, { STRIPE_SECRET_KEY: 'sk' })).toEqual([
+        'STRIPE_SECRET_KEY',
+      ])
+      expect(await provisioner.functions(p.ref)).toEqual({
+        enabled: true,
+        functions: ['hello'],
+        verify_jwt: { hello: false },
+        secrets: ['STRIPE_SECRET_KEY'],
+      })
+
+      await provisioner.removeFunctions(p.ref)
+      expect((await registry.get(p.ref))!.functions).toBe(false)
+      expect(Object.keys((await composeOf(id)).services)).not.toContain('supabase-functions')
+    } finally {
+      server.close()
+    }
   })
 })
 

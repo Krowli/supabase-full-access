@@ -10,6 +10,7 @@ import type { BaseBackup } from '../src/runner/walg.ts'
 import { BackupService } from '../src/backup/service.ts'
 import type { Run, RunStore, RunUpdate } from '../src/backup/state.ts'
 import { generateProjectSecrets } from '../src/secrets.ts'
+import type { PostgresVersion } from '../src/template.ts'
 import { MemoryRegistry } from './fakes.ts'
 
 const CONFIG = `
@@ -128,9 +129,10 @@ describe('BackupService', () => {
       },
       loadConfig: async () => ({ raw: opts.config === undefined ? CONFIG : opts.config }),
       controlPlane: {
-        createProject: async (name) => {
+        createProject: async (name, postgres) => {
           const newRef = 'newnewnewnewnewnewne'
-          await registry.insert({ ref: newRef, name }, generateProjectSecrets(newRef))
+          const postgres_version = postgres as PostgresVersion
+          await registry.insert({ ref: newRef, name, postgres_version }, generateProjectSecrets(newRef))
           await registry.update(newRef, { status: 'ACTIVE_HEALTHY', coolify_service_uuid: 'uuid2' })
           return newRef
         },
@@ -269,6 +271,7 @@ describe('BackupService', () => {
       const run = runs.rows.find((r) => r.kind === 'restore')!
       expect(run.error).toBeNull()
       expect(run).toMatchObject({ status: 'succeeded', target_ref: 'newnewnewnewnewnewne' })
+      expect(registry.projects.get('newnewnewnewnewnewne')!.postgres_version).toBe('15')
       expect(calls).toContain('restic restore')
     } finally {
       server.close()
@@ -362,9 +365,10 @@ encryption_key: 0123456789abcdef0123456789abcdef
       },
       loadConfig: async () => ({ raw: PITR_CONFIG }),
       controlPlane: {
-        createProject: async (name) => {
+        createProject: async (name, postgres) => {
           const newRef = 'newnewnewnewnewnewne'
-          await registry.insert({ ref: newRef, name }, generateProjectSecrets(newRef))
+          const postgres_version = postgres as PostgresVersion
+          await registry.insert({ ref: newRef, name, postgres_version }, generateProjectSecrets(newRef))
           await registry.update(newRef, { status: 'ACTIVE_HEALTHY', coolify_service_uuid: 'uuid2' })
           return newRef
         },
@@ -390,7 +394,8 @@ encryption_key: 0123456789abcdef0123456789abcdef
     // Before today's restic schedule, so only PITR acts in these tests.
     clock = new Date('2026-11-06T01:00:00Z')
     archive = { mode: 'off', wal: '', at: null, failed: 0, failedAt: null }
-    await registry.insert({ ref, name: 'demo' }, generateProjectSecrets(ref))
+    // On Postgres 17: the copy at a moment must be a 17 project too.
+    await registry.insert({ ref, name: 'demo', postgres_version: '17' }, generateProjectSecrets(ref))
     await registry.update(ref, { status: 'ACTIVE_HEALTHY', coolify_service_uuid: 'uuid1' })
     registry.projects.get(ref)!.created_at = new Date('2026-01-01T00:00:00Z')
   })
@@ -460,6 +465,7 @@ encryption_key: 0123456789abcdef0123456789abcdef
     expect(calls).toContain('psql -At') // the commit and the WAL switch before the copy
     expect(runnerCalls.slice(-2)).toEqual(['scratch uuid1 base_000000010000000000000002 2026-11-06T00:20:00.000Z', 'drop uuid1'])
     expect(dumpedFrom).toEqual(['pitr-uuid1', 'pitr-uuid1'])
+    expect(registry.projects.get('newnewnewnewnewnewne')!.postgres_version).toBe('17')
   })
 
   it('takes a restore at a moment over the API', async () => {

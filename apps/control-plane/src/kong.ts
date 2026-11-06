@@ -4,7 +4,14 @@
 // Routes follow docker/volumes/api/kong.yml, scoped per project by `hosts: [<ref>.<suffix>]`.
 
 /** A project as Kong routes it. Upstreams are the project containers on the `coolify` network. */
-export type GatewayProject = { ref: string; uuid: string; anonKey: string; serviceKey: string }
+export type GatewayProject = {
+  ref: string
+  uuid: string
+  anonKey: string
+  serviceKey: string
+  /** Edge Functions deployed: /functions/v1/ routes to the project's edge-runtime. */
+  functions?: boolean
+}
 
 export type KongRenderOptions = {
   domainSuffix: string
@@ -103,6 +110,7 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
       }
     )
 
+    const functions = `http://supabase-functions-${p.uuid}:9000`
     const auth = `http://supabase-auth-${p.uuid}:9999`
     const rest = `http://supabase-rest-${p.uuid}:3000`
     const storage = `http://supabase-storage-${p.uuid}:5000`
@@ -229,6 +237,13 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
         route: { request_buffering: false, response_buffering: false },
       }
     )
+
+    // Edge Functions check the JWT themselves (verify_jwt per function, in the router) and answer
+    // CORS themselves, as on the platform: no key-auth or cors plugin. A request may run 150 s.
+    if (p.functions)
+      add('functions-v1', `${functions}/`, '/functions/v1/', [], {
+        service: { connect_timeout: 10_000, read_timeout: 150_000, write_timeout: 150_000 },
+      })
   }
   if (opts.dashboard) {
     const { consumer, service } = renderDashboard(opts.dashboard, opts.domainSuffix)

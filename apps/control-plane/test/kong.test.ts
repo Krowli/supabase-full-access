@@ -71,6 +71,17 @@ describe('renderKongConfig', () => {
     ).toBeDefined()
   })
 
+  it('routes /functions/v1/ to the edge runtime only for projects with functions, keyless and long', () => {
+    const withFunctions = renderKongConfig([{ ...a, functions: true }, b], opts)
+    const f = service(withFunctions, `${a.ref}-functions-v1`)
+    expect(f.url).toBe('http://supabase-functions-uuida:9000/')
+    expect(f.route.paths).toEqual(['/functions/v1/'])
+    expect(f.plugins).toEqual([])
+    expect(f.read_timeout).toBe(150_000)
+    expect(withFunctions.services.some((s) => s.name === `${b.ref}-functions-v1`)).toBe(false)
+    expect(config.services.some((s) => s.name.endsWith('-functions-v1'))).toBe(false)
+  })
+
   it('is deterministic and empty without projects', () => {
     expect(renderKongConfig([a, b], opts)).toEqual(config)
     expect(renderKongConfig([], opts)).toEqual({

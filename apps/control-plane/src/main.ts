@@ -47,6 +47,7 @@ const gateway = new KongGateway({
         uuid: p.coolify_service_uuid!,
         anonKey: secrets.anon_key,
         serviceKey: secrets.service_key,
+        functions: p.functions,
       })
     }
     return out
@@ -80,6 +81,7 @@ const provisioner = new Provisioner({
   gateway,
   healthTimeoutMs: config.healthTimeoutMs,
   pollIntervalMs: config.pollIntervalMs,
+  newProjectPostgres: config.newProjectPostgres,
   log,
 })
 

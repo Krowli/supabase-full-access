@@ -4,6 +4,7 @@ import type { ObjectStorage } from './minio.ts'
 import type { ProjectDirs } from './project-dirs.ts'
 import type { Project, Registry } from './registry.ts'
 import { generateProjectSecrets, generateRef, type ProjectSecrets } from './secrets.ts'
+import { POSTGRES_VERSIONS, type PostgresVersion } from './template.ts'
 import type { TenantRegistry } from './tenants.ts'
 
 export type ProvisionerDeps = {
@@ -22,6 +23,8 @@ export type ProvisionerDeps = {
   projectDirs: ProjectDirs
   healthTimeoutMs: number
   pollIntervalMs: number
+  /** The Postgres major of new projects that do not name one (NEW_PROJECT_POSTGRES_VERSION). */
+  newProjectPostgres?: PostgresVersion
   log?: (event: string, fields: Record<string, unknown>) => void
   sleep?: (ms: number) => Promise<void>
 }
@@ -33,6 +36,8 @@ export function routedProjects(projects: Project[]): Project[] {
 
 export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
+/** Bad input from the caller: the API answers 400. */
+export class InputError extends Error {}
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -71,11 +76,23 @@ export class Provisioner {
     return this.running.has(ref)
   }
 
-  /** Registers a new project and starts provisioning it in the background. */
-  async create(name: string): Promise<{ project: Project; done: Promise<void> }> {
+  /**
+   * Registers a new project and starts provisioning it in the background, on Postgres
+   * `postgres_version` (the platform's default for new projects when not given).
+   */
+  async create(
+    name: string,
+    options: { postgres_version?: string } = {}
+  ): Promise<{ project: Project; done: Promise<void> }> {
+    const version = options.postgres_version ?? this.deps.newProjectPostgres ?? '15'
+    if (!(POSTGRES_VERSIONS as readonly string[]).includes(version))
+      throw new InputError(`postgres_version must be one of ${POSTGRES_VERSIONS.join(', ')}`)
     const ref = generateRef()
-    const project = await this.deps.registry.insert({ ref, name }, generateProjectSecrets(ref))
-    this.log('project.created', { ref })
+    const project = await this.deps.registry.insert(
+      { ref, name, postgres_version: version as PostgresVersion },
+      generateProjectSecrets(ref)
+    )
+    this.log('project.created', { ref, postgres_version: version })
     return { project, done: this.provision(ref) }
   }
 
@@ -170,7 +187,8 @@ export class Provisioner {
       uuid = await coolify.createService(
         project.ref,
         project.name,
-        this.deps.renderCompose(project.ref)
+        this.deps.renderCompose(project.ref),
+        { postgres: project.postgres_version }
       )
       this.log('project.service_created', { ref: project.ref, uuid })
     }
@@ -210,6 +228,52 @@ export class Provisioner {
     await coolify.updateCompose(uuid, this.deps.renderCompose(ref))
     await coolify.restart(uuid)
     this.log('project.stack_updated', { ref, uuid })
+  }
+
+  /** The project's stack and its Edge Functions calls, for a project that is up. */
+  private async functionsTarget(ref: string) {
+    if (this.running.has(ref)) throw new ConflictError(`Project ${ref} is being provisioned`)
+    const project = await this.deps.registry.get(ref)
+    if (!project) throw new NotFoundError(`Project ${ref} not found`)
+    const uuid = project.coolify_service_uuid
+    if (project.status !== 'ACTIVE_HEALTHY' || !uuid)
+      throw new ConflictError(`Project ${ref} is ${project.status}, not ACTIVE_HEALTHY`)
+    const functions = this.deps.coolify.functions
+    if (!functions) throw new ConflictError('Edge Functions need the runner (STACK_BACKEND=runner)')
+    return { project, uuid, functions }
+  }
+
+  /** Deploys all of the project's Edge Functions; the first deploy routes /functions/v1/ to them. */
+  async deployFunctions(ref: string, bundle: { files?: unknown; verify_jwt?: unknown }): Promise<string[]> {
+    const { project, uuid, functions } = await this.functionsTarget(ref)
+    const names = await functions.deploy(uuid, bundle)
+    if (!project.functions) {
+      await this.deps.registry.update(ref, { functions: true })
+      await this.deps.gateway.sync()
+    }
+    this.log('project.functions_deployed', { ref, functions: names })
+    return names
+  }
+
+  async functions(ref: string): Promise<unknown> {
+    const { uuid, functions } = await this.functionsTarget(ref)
+    return functions.get(uuid)
+  }
+
+  async setFunctionSecrets(ref: string, secrets: unknown): Promise<string[]> {
+    const { uuid, functions } = await this.functionsTarget(ref)
+    const names = await functions.setSecrets(uuid, secrets)
+    this.log('project.functions_secrets_set', { ref, secrets: names })
+    return names
+  }
+
+  /** Edge Functions off: the route goes first, then the container, code and secrets. */
+  async removeFunctions(ref: string): Promise<void> {
+    const { uuid, functions } = await this.functionsTarget(ref)
+    await this.deps.registry.update(ref, { functions: false })
+    await this.deps.gateway.sync()
+    await functions.remove(uuid)
+    this.log('project.functions_removed', { ref })
   }
 
   /**

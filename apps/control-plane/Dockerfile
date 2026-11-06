@@ -14,6 +14,8 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY apps/control-plane/src ./src
 # src/config.ts finds the template at this path relative to src/ (PROJECT_TEMPLATE_PATH overrides).
 COPY deploy/platform/project-compose.yaml /app/deploy/platform/project-compose.yaml
+# The Edge Functions router the runner copies into stacks with functions (src/runner/stacks.ts).
+COPY deploy/platform/functions-main /app/deploy/platform/functions-main
 ENV NODE_ENV=production PORT=8080
 
 # The runner (src/runner): runs the project stacks through the host's Docker socket, from the

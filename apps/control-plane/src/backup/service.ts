@@ -37,7 +37,8 @@ import type { Run, RunKind, RunStore } from './state.ts'
 export type ConfigSource = () => Promise<{ raw: string | null; note?: string }>
 
 export type ControlPlaneClient = {
-  createProject(name: string): Promise<string>
+  /** A new project on `postgres` (a restore keeps the source's major: its dump is that major's). */
+  createProject(name: string, postgres: string): Promise<string>
   waitActive(ref: string): Promise<void>
 }
 
@@ -143,7 +144,7 @@ export class BackupService {
     this.push({
       run,
       work: async () => {
-        const targetRef = await this.deps.controlPlane.createProject(name)
+        const targetRef = await this.deps.controlPlane.createProject(name, source.postgres_version)
         await this.deps.runs.update(run.id, { target_ref: targetRef })
         await this.deps.controlPlane.waitActive(targetRef)
         const target = await this.deps.registry.get(targetRef)
@@ -188,7 +189,7 @@ export class BackupService {
         await this.deps.runs.update(run.id, { snapshot_id: base.name })
         const host = await runner.startScratch(stack, base.name, at)
         try {
-          const targetRef = await this.deps.controlPlane.createProject(name)
+          const targetRef = await this.deps.controlPlane.createProject(name, source.postgres_version)
           await this.deps.runs.update(run.id, { target_ref: targetRef })
           await this.deps.controlPlane.waitActive(targetRef)
           const target = await this.deps.registry.get(targetRef)

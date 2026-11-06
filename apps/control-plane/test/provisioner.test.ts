@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { ConflictError, NotFoundError, Provisioner } from '../src/provisioner.ts'
+import { ConflictError, InputError, NotFoundError, Provisioner } from '../src/provisioner.ts'
 import { generateProjectSecrets } from '../src/secrets.ts'
 import { noTenants } from '../src/tenants.ts'
 import { fakeShared, FakeCoolify, MemoryRegistry } from './fakes.ts'
@@ -127,6 +127,40 @@ describe('create', () => {
     await Promise.all([done, again])
     expect(coolify.calls.filter((c) => c === 'createService')).toHaveLength(1)
     expect(coolify.calls.filter((c) => c === 'start')).toHaveLength(1)
+  })
+})
+
+describe('Postgres major and Edge Functions', () => {
+  it('makes a project on the major asked for, else on the platform default, and refuses others', async () => {
+    const { project, done } = await provisioner.create('New', { postgres_version: '17' })
+    await done
+    expect((await registry.get(project.ref))!.postgres_version).toBe('17')
+    expect(coolify.createOptions).toEqual([{ postgres: '17' }])
+    expect((await createAndWait('Old')).postgres_version).toBe('15')
+    await expect(provisioner.create('x', { postgres_version: '16' })).rejects.toThrow(InputError)
+
+    const on17 = new Provisioner({
+      registry,
+      coolify,
+      ...shared,
+      renderCompose: () => '',
+      serviceEnvs: () => ({}),
+      healthTimeoutMs: 60_000,
+      pollIntervalMs: 0,
+      sleep: async () => {},
+      newProjectPostgres: '17',
+    })
+    const made = await on17.create('Default')
+    await made.done
+    expect((await registry.get(made.project.ref))!.postgres_version).toBe('17')
+  })
+
+  it('has no Edge Functions on a backend without them (Coolify), and none for a project not up', async () => {
+    const p = await createAndWait()
+    await expect(provisioner.deployFunctions(p.ref, { files: {} })).rejects.toThrow(/need the runner/)
+    const { project } = await provisioner.create('Later')
+    await expect(provisioner.functions(project.ref)).rejects.toThrow(ConflictError)
+    await expect(provisioner.functions('zzzzzzzzzzzzzzzzzzzz')).rejects.toThrow(NotFoundError)
   })
 })
 

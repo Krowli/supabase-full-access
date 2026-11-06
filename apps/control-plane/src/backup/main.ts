@@ -79,11 +79,11 @@ const loadConfig: ConfigSource = async () => {
 }
 
 const controlPlane: ControlPlaneClient = {
-  async createProject(name) {
+  async createProject(name, postgres) {
     const res = await fetch(`${config.controlPlaneUrl}/projects`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${config.apiToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, postgres_version: postgres }),
       signal: AbortSignal.timeout(60_000),
     })
     const body = (await res.json().catch(() => ({}))) as { ref?: string; error?: string }
