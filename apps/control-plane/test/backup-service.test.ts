@@ -453,7 +453,7 @@ encryption_key: 0123456789abcdef0123456789abcdef
     await expect(s.enqueuePitrRestore(ref, new Date('2026-11-05T01:00:00Z'), 'copy')).rejects.toThrow(/earliest moment is 2026-11-05T02:30:09Z/)
 
     const run = await s.enqueuePitrRestore(ref, new Date('2026-11-06T00:20:00Z'), 'copy')
-    await settle()
+    for (let i = 0; i < 100 && !['succeeded', 'failed'].includes(runs.rows.find((r) => r.id === run.id)!.status); i++) await settle()
     const done = runs.rows.find((r) => r.id === run.id)!
     expect(done).toMatchObject({ kind: 'restore', status: 'succeeded', target_ref: 'newnewnewnewnewnewne', snapshot_id: 'base_000000010000000000000002' })
     expect(done.warnings?.split('\n')[0]).toBe('The database as it was at 2026-11-06T00:20:00.000Z; Storage files and settings as they are now.')
@@ -477,7 +477,11 @@ encryption_key: 0123456789abcdef0123456789abcdef
       expect(bad.status).toBe(400)
       const ok = await fetch(url, { method: 'POST', headers: auth, body: JSON.stringify({ target_time: '2026-11-06T00:20:00Z', name: 'copy' }) })
       expect(ok.status).toBe(202)
-      expect((await ok.json()).kind).toBe('restore')
+      const { id, kind } = await ok.json()
+      expect(kind).toBe('restore')
+      // The restore goes on in the background: let it finish before the stage directory goes.
+      for (let i = 0; i < 100 && runs.rows.find((r) => r.id === id)?.status !== 'succeeded'; i++) await settle()
+      expect(runs.rows.find((r) => r.id === id)?.status).toBe('succeeded')
     } finally {
       server.close()
     }
