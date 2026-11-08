@@ -161,6 +161,12 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
       ['auth-v1-open-jwks', '/.well-known/jwks.json'],
       ['auth-v1-open-sso-acs', '/sso/saml/acs'],
       ['auth-v1-open-sso-metadata', '/sso/saml/metadata'],
+      // OAuth 2.1 server (sign-in from an AI assistant, MCP): the client registers itself, sends the
+      // person to authorize and exchanges the code without a project key, as on Supabase Cloud.
+      // Consent (/oauth/authorizations/*) stays keyed: only the project's own site calls it.
+      ['auth-v1-open-oauth-register', '/oauth/clients/register'],
+      ['auth-v1-open-oauth-authorize', '/oauth/authorize'],
+      ['auth-v1-open-oauth-token', '/oauth/token'],
     ]) {
       add(name, auth + path, `/auth/v1${path}`, [cors])
     }
@@ -169,6 +175,14 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
       'well-known-oauth',
       `${auth}/.well-known/oauth-authorization-server`,
       '/.well-known/oauth-authorization-server',
+      [cors]
+    )
+    // The same document where an MCP client looks for it: RFC 8414 puts the issuer's path
+    // (`/auth/v1`, see GOTRUE_JWT_ISSUER in project-compose.yaml) after the well-known name.
+    add(
+      'well-known-oauth-auth-v1',
+      `${auth}/.well-known/oauth-authorization-server`,
+      '/.well-known/oauth-authorization-server/auth/v1',
       [cors]
     )
 
