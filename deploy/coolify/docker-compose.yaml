@@ -267,7 +267,7 @@ services:
     command: postgrest
     exclude_from_hc: true
   supabase-auth:
-    image: 'supabase/gotrue:v2.186.0'
+    image: 'supabase/gotrue:v2.196.0'
     command:
       - auth
       - '--config-dir'

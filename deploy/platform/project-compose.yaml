@@ -300,7 +300,8 @@ services:
     command: postgrest
     exclude_from_hc: true
   supabase-auth:
-    image: 'supabase/gotrue:v2.186.0'
+    # v2.195.0+ accepts the offline_access scope MCP clients ask for (supabase/auth #2630).
+    image: 'supabase/gotrue:v2.196.0'
     command:
       - auth
       - '--config-dir'
@@ -337,6 +338,10 @@ services:
       - GOTRUE_JWT_DEFAULT_GROUP_NAME=authenticated
       - GOTRUE_JWT_EXP=3600
       - 'GOTRUE_JWT_SECRET=${PROJECT_JWT_SECRET}'
+      # The issuer GoTrue signs into tokens and names in its OAuth server metadata. Without it the
+      # metadata's issuer is empty and its endpoints are bare paths, which an MCP client refuses.
+      # `/auth/v1` because that is where Kong serves this GoTrue, as on Supabase Cloud.
+      - 'GOTRUE_JWT_ISSUER={{PUBLIC_URL}}/auth/v1'
       - GOTRUE_EXTERNAL_EMAIL_ENABLED=true
       - GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED=false
       - GOTRUE_MAILER_AUTOCONFIRM=false

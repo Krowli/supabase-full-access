@@ -62,6 +62,25 @@ describe('renderKongConfig', () => {
     expect(service(config, `${a.ref}-storage-v1`).plugin('key-auth')).toBeUndefined()
   })
 
+  it('opens the OAuth server endpoints an assistant calls without a key, and keeps consent keyed', () => {
+    for (const [name, path] of [
+      ['auth-v1-open-oauth-register', '/auth/v1/oauth/clients/register'],
+      ['auth-v1-open-oauth-authorize', '/auth/v1/oauth/authorize'],
+      ['auth-v1-open-oauth-token', '/auth/v1/oauth/token'],
+    ]) {
+      const s = service(config, `${a.ref}-${name}`)
+      expect(s.route.paths, name).toEqual([path])
+      expect(s.plugin('key-auth'), name).toBeUndefined()
+      expect(s.url, name).toBe(`http://supabase-auth-uuida:9999${path.slice('/auth/v1'.length)}`)
+    }
+    // Consent (/oauth/authorizations/{id}) is not opened: it falls to the keyed auth-v1 route.
+    expect(config.services.some((s) => s.name.includes('oauth-authorizations'))).toBe(false)
+    const discovery = service(config, `${a.ref}-well-known-oauth-auth-v1`)
+    expect(discovery.route.paths).toEqual(['/.well-known/oauth-authorization-server/auth/v1'])
+    expect(discovery.url).toBe('http://supabase-auth-uuida:9999/.well-known/oauth-authorization-server')
+    expect(discovery.plugin('key-auth')).toBeUndefined()
+  })
+
   it('sends Realtime the project host so it picks the right tenant, and blocks its admin API', () => {
     const ws = service(config, `${a.ref}-realtime-v1-ws`)
     expect(ws.url).toBe('http://realtime:4000/socket')

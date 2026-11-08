@@ -75,6 +75,9 @@ describe('project-compose.yaml', () => {
   it('puts the ref, URL, shared MinIO and shared imgproxy into the services', () => {
     const compose = parse(render()) as Compose
     expect(envOf(compose, 'supabase-auth').API_EXTERNAL_URL).toBe(`https://${ref}.supa.example.com`)
+    expect(envOf(compose, 'supabase-auth').GOTRUE_JWT_ISSUER).toBe(
+      `https://${ref}.supa.example.com/auth/v1`
+    )
     const storage = envOf(compose, 'supabase-storage')
     expect(storage).toMatchObject({
       TENANT_ID: ref,
