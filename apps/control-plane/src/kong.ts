@@ -66,34 +66,51 @@ const AUTH_EXPR =
  *
  * The payload is read without checking the signature. That is safe for a refusal: a client that
  * edits the claims away breaks the signature, and the upstream refuses the token.
+ * Every JWT-shaped part of the Authorization header is read, whatever the scheme says: GoTrue
+ * accepts `(?i)^bearer `, so `BEARER <token>` must not slip past a `Bearer` pattern. It is the
+ * only header GoTrue, PostgREST and Storage take a user's token from; on storage-v1, with no
+ * key-auth, request-transformer has already copied a lone `apikey` into it.
  * Only the top-level `client_id` and `role` count, decoded with cjson.safe, so nothing in
  * `user_metadata` triggers the rule. cjson.safe must be in KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES;
- * without it the rule logs and lets the request through, as before this rule.
- * The Authorization header reaches the plugin as request-transformer wrote it, with a leading space.
+ * without it the rule fails closed: it logs and refuses any JWT whose payload text mentions
+ * `client_id` or `oauth_client` (a site session with such a word in its metadata included).
  */
 const OAUTH_CLIENT_SCOPE_LUA = (allowed: string) => `local auth = kong.request.get_header("authorization")
-local payload = auth and auth:match("^%s*[Bb]earer%s+[%w%-_]+%.([%w%-_]+)%.")
-if payload then
+if auth then
   local ok, cjson = pcall(require, "cjson.safe")
   if not ok then
-    kong.log.err("oauth client scope: cjson.safe is not allowed (KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES)")
-    return
+    kong.log.err("oauth client scope: cjson.safe is not allowed (KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES): refusing every JWT that mentions client_id or oauth_client")
   end
-  local b64 = payload:gsub("%-", "+"):gsub("_", "/")
-  local claims = cjson.decode(ngx.decode_base64(b64 .. string.rep("=", (4 - #b64 % 4) % 4)) or "")
-  if type(claims) == "table" then
-    local client = claims.client_id
-    if (client ~= nil and client ~= cjson.null and client ~= "") or claims.role == "oauth_client" then
-${allowed}      return kong.response.exit(403, { code = "oauth_client_token_scope", message = "This token was issued to an OAuth client: it opens only GET /auth/v1/user and /auth/v1/oauth/userinfo." })
+  local assistant = false
+  -- Every JWT-shaped part of the header, whatever the scheme's case or spacing: GoTrue takes
+  -- (?i)^bearer, PostgREST and Storage a bearer of their own.
+  for payload in auth:gmatch("[%w%-_]+%.([%w%-_]+)%.[%w%-_]+") do
+    local b64 = payload:gsub("%-", "+"):gsub("_", "/")
+    local text = ngx.decode_base64(b64 .. string.rep("=", (4 - #b64 % 4) % 4))
+    if text then
+      if ok then
+        local claims = cjson.decode(text)
+        if type(claims) == "table" then
+          local client = claims.client_id
+          if (client ~= nil and client ~= cjson.null and client ~= "") or claims.role == "oauth_client" then
+            assistant = true
+          end
+        end
+      elseif text:find("client_id", 1, true) or text:find("oauth_client", 1, true) then
+        assistant = true
+      end
     end
+  end
+  if assistant then
+${allowed}    return kong.response.exit(403, { code = "oauth_client_token_scope", message = "This token was issued to an OAuth client: it opens only GET /auth/v1/user and /auth/v1/oauth/userinfo." })
   end
 end`
 
 /** What an OAuth client's token may still reach on auth-v1. */
-const OAUTH_CLIENT_AUTH_ALLOWED = `      local method, path = kong.request.get_method(), kong.request.get_path()
-      if (method == "GET" and path:match("^/auth/v1/user/?$")) or path:match("^/auth/v1/oauth/userinfo/?$") then
-        return
-      end
+const OAUTH_CLIENT_AUTH_ALLOWED = `    local method, path = kong.request.get_method(), kong.request.get_path()
+    if (method == "GET" and path:match("^/auth/v1/user/?$")) or path:match("^/auth/v1/oauth/userinfo/?$") then
+      return
+    end
 `
 
 /** The rule above, as the post-function's first access chunk. */

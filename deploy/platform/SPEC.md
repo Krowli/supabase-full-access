@@ -1041,8 +1041,10 @@ internet ─ *.<platform-domain> (DNS → server A)
   A token GoTrue's OAuth server issued to a third-party client (top-level `client_id`, or
   `role: oauth_client`) reaches only `GET /auth/v1/user` and `/auth/v1/oauth/userinfo`; every
   other keyed route, `/storage/v1/`, `/functions/v1/` and `/realtime/v1/api` answer it 403
-  (`oauthClientScope`, a post-function; needs `KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES=cjson.safe`,
-  without which it logs and lets requests through). The open OAuth endpoints are not limited.
+  (`oauthClientScope`, a post-function, reading every JWT in the Authorization header whatever
+  the scheme's case; decodes with cjson.safe from `KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES`, and
+  without it refuses any JWT whose payload text names `client_id` or `oauth_client`). The open
+  OAuth endpoints are not limited.
   The Realtime websocket carries its token inside the socket, out of Kong's reach.
 - **Kong config ownership** (`apps/control-plane/src/kong.ts`). The control plane renders the
   whole declarative config from the registry on every change (every project that has a Coolify

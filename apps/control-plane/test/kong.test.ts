@@ -127,8 +127,12 @@ describe('renderKongConfig', () => {
     expect(rule).toContain('kong.response.exit(403')
     // Elsewhere nothing is open to such a token.
     expect(oauthClientScope()).not.toContain('path:match(')
-    // The header arrives with a leading space (request-transformer): the pattern allows it.
-    expect(rule).toContain('auth:match("^%s*[Bb]earer%s+')
+    // Any scheme, any case, any spacing: every JWT-shaped part of the header is read (GoTrue takes
+    // (?i)^bearer, so a Bearer-only pattern let BEARER through).
+    expect(rule).toContain('auth:gmatch("[%w%-_]+%.([%w%-_]+)%.[%w%-_]+")')
+    expect(rule).not.toContain('[Bb]earer')
+    // Without cjson.safe it fails closed on the payload text.
+    expect(rule).toContain('text:find("client_id", 1, true) or text:find("oauth_client", 1, true)')
   })
 
   it('is deterministic and empty without projects', () => {
