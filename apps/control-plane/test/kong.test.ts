@@ -129,7 +129,15 @@ describe('renderKongConfig', () => {
     expect(oauthClientScope()).not.toContain('path:match(')
     // Any scheme, any case, any spacing: every JWT-shaped part of the header is read (GoTrue takes
     // (?i)^bearer, so a Bearer-only pattern let BEARER through).
-    expect(rule).toContain('auth:gmatch("[%w%-_]+%.([%w%-_]+)%.[%w%-_]+")')
+    expect(rule).toContain('auth:gmatch("[^%s,]+")')
+    expect(rule).toContain('word:match("^[%w%-_]+%.([%w%-_]+)%.[%w%-_]+$")')
+    // No unanchored JWT search over the whole header (O(n^2) on a long dotless word).
+    expect(rule).not.toContain('auth:gmatch("[%w%-_]+%.')
+    // One Authorization header, at most 16 KB.
+    expect(rule).toContain('local headers, truncated = kong.request.get_headers(1000)')
+    expect(rule).toContain('local auth = headers["authorization"]')
+    expect(rule).toContain('if type(auth) == "table" then')
+    expect(rule).toContain('if #auth > 16384 then')
     expect(rule).not.toContain('[Bb]earer')
     // Without cjson.safe it fails closed on the payload text.
     expect(rule).toContain('text:find("client_id", 1, true) or text:find("oauth_client", 1, true)')

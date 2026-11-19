@@ -17,6 +17,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { join } from 'node:path'
 const S = (process.env.SCOPED_KEYS_STATE ?? join(process.env.TMPDIR ?? '/tmp', 'fin295-state')) + '/'
 const K = new URL('.', import.meta.url).pathname
@@ -87,6 +88,29 @@ for (const authorization of [`BEARER ${oa}`, `bearer ${oa}`, `bEaReR ${oa}`, `Be
   const x = await call(A, 'PUT', '/auth/v1/user', { authorization, body: { password: 'Changed-by-assistant-2!' } })
   check(`refused by Kong: PUT /auth/v1/user with ${JSON.stringify(authorization.slice(0, 8))}…`, scoped(x), `${x.status} ${x.json?.code ?? x.text}`)
 }
+// Two Authorization headers (raw, as two lines), and the same folded into one with a comma.
+function raw(path, headerPairs) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(A.base + path)
+    const req = httpRequest({ host: '127.0.0.1', port: url.port, path: url.pathname, method: 'PUT', headers: [['Host', url.host], ['apikey', A.anon], ['Content-Type', 'application/json'], ...headerPairs].flat() }, (res) => {
+      let body = ''
+      res.on('data', (c) => (body += c))
+      res.on('end', () => { let json; try { json = JSON.parse(body) } catch {} resolve({ status: res.status ?? res.statusCode, json }) })
+    })
+    req.on('error', reject)
+    req.end(JSON.stringify({ password: 'Changed-by-assistant-3!' }))
+  })
+}
+const two = await raw('/auth/v1/user', [['Authorization', `Bearer ${site.access_token}`], ['Authorization', `Bearer ${oa}`]])
+// Kong 3.9.1 itself answers 400 "Bad request" to a second Authorization line before any plugin runs
+// (measured on every route); the rule's own check (a table value) stays as defence in depth.
+check('two Authorization headers: refused with 400 before the upstream', two.status === 400 && (two.json?.code === 'authorization_header_refused' || two.json?.message === 'Bad request'), `${two.status} ${two.json?.code ?? two.json?.message}`)
+const folded = await call(A, 'PUT', '/auth/v1/user', { authorization: `Bearer ${site.access_token}, Bearer ${oa}`, body: { password: 'Changed-by-assistant-3!' } })
+check('both tokens in one header, comma-separated: refused by Kong', scoped(folded), `${folded.status} ${folded.json?.code ?? folded.text}`)
+const big = await call(A, 'PUT', '/auth/v1/user', { authorization: `Bearer ${oa} ${'a'.repeat(17000)}`, body: {} })
+check('an Authorization header over 16 KB: refused', big.status === 400 && big.json?.code === 'authorization_header_refused', `${big.status} ${big.json?.code}`)
+const many = await raw('/auth/v1/user', [...Array.from({ length: 1001 }, (_, i) => [`x-pad-${i}`, '1']), ['Authorization', `Bearer ${oa}`]])
+check('1001 headers before Authorization: refused, not read past', many.status === 400 && many.json?.code === 'authorization_header_refused', `${many.status} ${many.json?.code}`)
 // The assistant token as a lone apikey on storage (no key-auth there): request-transformer copies it into Authorization.
 const lone = await fetch(A.base + '/storage/v1/bucket', { headers: { apikey: oa } })
 check('refused by Kong: the assistant token as a lone apikey on storage', lone.status === 403, `${lone.status}`)
