@@ -69,6 +69,8 @@ services:
       - 'KONG_ADMIN_TOKEN=${SERVICE_PASSWORD_KONGADMIN}'
       # The control plane applies the whole declarative config with POST /config (src/kong.ts).
       - 'KONG_PLUGINS=request-transformer,cors,key-auth,acl,request-termination,post-function,basic-auth'
+      # cjson.safe for the OAuth-client rule's JWT decode in post-function (control-plane kong.ts).
+      - KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES=cjson.safe
       - 'KONG_DNS_ORDER=LAST,A,CNAME'
       - KONG_DNS_NOT_FOUND_TTL=1
       - KONG_NGINX_WORKER_PROCESSES=2

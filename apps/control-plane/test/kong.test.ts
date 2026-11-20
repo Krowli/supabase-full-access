@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { KongGateway, renderKongConfig, type GatewayProject, type KongConfig } from '../src/kong.ts'
+import { KongGateway, oauthClientScope, renderKongConfig, type GatewayProject, type KongConfig } from '../src/kong.ts'
 import { generateProjectSecrets } from '../src/secrets.ts'
 
 const opts = { domainSuffix: 'supa.example.com', realtimeUrl: 'http://realtime:4000' }
@@ -95,10 +95,52 @@ describe('renderKongConfig', () => {
     const f = service(withFunctions, `${a.ref}-functions-v1`)
     expect(f.url).toBe('http://supabase-functions-uuida:9000/')
     expect(f.route.paths).toEqual(['/functions/v1/'])
-    expect(f.plugins).toEqual([])
+    expect(f.plugins.map((x) => x.name)).toEqual(['post-function'])
     expect(f.read_timeout).toBe(150_000)
     expect(withFunctions.services.some((s) => s.name === `${b.ref}-functions-v1`)).toBe(false)
     expect(config.services.some((s) => s.name.endsWith('-functions-v1'))).toBe(false)
+  })
+
+  it("limits an OAuth client's token: every keyed route and storage, functions and realtime REST carry the rule", () => {
+    const withFunctions = renderKongConfig([{ ...a, functions: true }], opts)
+    const scoped = ['auth-v1', 'rest-v1', 'graphql-v1', 'realtime-v1-rest', 'storage-v1', 'functions-v1']
+    for (const name of scoped) {
+      const access = (service(withFunctions, `${a.ref}-${name}`).plugin('post-function')?.config?.access ?? []) as string[]
+      expect(access[0], name).toBe(oauthClientScope({ authRoute: name === 'auth-v1' }))
+    }
+    // Storage keeps its empty-Authorization clean-up after the rule.
+    const storage = service(withFunctions, `${a.ref}-storage-v1`).plugin('post-function')?.config?.access as string[]
+    expect(storage).toHaveLength(2)
+    expect(storage[1]).toContain('clear_header("authorization")')
+    // The open OAuth and e-mail endpoints, discovery and JWKS stay open to everyone.
+    for (const s of withFunctions.services.filter((x) => !scoped.some((n) => x.name === `${a.ref}-${n}`))) {
+      expect(s.plugins.some((p) => p.name === 'post-function'), s.name).toBe(false)
+    }
+  })
+
+  it('reads only the top-level client_id and role, and opens only GET /user and /oauth/userinfo on auth-v1', () => {
+    const rule = oauthClientScope({ authRoute: true })
+    expect(rule).toContain('pcall(require, "cjson.safe")')
+    expect(rule).toContain('local client = claims.client_id')
+    expect(rule).toContain('claims.role == "oauth_client"')
+    expect(rule).toContain('(method == "GET" and path:match("^/auth/v1/user/?$")) or path:match("^/auth/v1/oauth/userinfo/?$")')
+    expect(rule).toContain('kong.response.exit(403')
+    // Elsewhere nothing is open to such a token.
+    expect(oauthClientScope()).not.toContain('path:match(')
+    // Any scheme, any case, any spacing: every JWT-shaped part of the header is read (GoTrue takes
+    // (?i)^bearer, so a Bearer-only pattern let BEARER through).
+    expect(rule).toContain('auth:gmatch("[^%s,]+")')
+    expect(rule).toContain('word:match("^[%w%-_]+%.([%w%-_]+)%.[%w%-_]+$")')
+    // No unanchored JWT search over the whole header (O(n^2) on a long dotless word).
+    expect(rule).not.toContain('auth:gmatch("[%w%-_]+%.')
+    // One Authorization header, at most 16 KB.
+    expect(rule).toContain('local headers, truncated = kong.request.get_headers(1000)')
+    expect(rule).toContain('local auth = headers["authorization"]')
+    expect(rule).toContain('if type(auth) == "table" then')
+    expect(rule).toContain('if #auth > 16384 then')
+    expect(rule).not.toContain('[Bb]earer')
+    // Without cjson.safe it fails closed on the payload text.
+    expect(rule).toContain('text:find("client_id", 1, true) or text:find("oauth_client", 1, true)')
   })
 
   it('is deterministic and empty without projects', () => {

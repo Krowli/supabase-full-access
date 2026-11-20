@@ -1038,6 +1038,18 @@ internet ─ *.<platform-domain> (DNS → server A)
   consumers per project (`<ref>-anon`, `<ref>-service_role`) in ACL groups `<ref>-anon` and
   `<ref>-admin`; keyed routes allow only those two groups. No `/pg/` route (Studio talks to
   pg-meta inside the network) and no dashboard route (Studio comes after M2).
+  A token GoTrue's OAuth server issued to a third-party client (top-level `client_id`, or
+  `role: oauth_client`) reaches only `GET /auth/v1/user` and `/auth/v1/oauth/userinfo`; every
+  other keyed route, `/storage/v1/`, `/functions/v1/` and `/realtime/v1/api` answer it 403
+  (`oauthClientScope`, a post-function, reading every JWT in the Authorization header whatever
+  the scheme's case; decodes with cjson.safe from `KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES`, and
+  without it refuses any JWT whose payload text names `client_id` or `oauth_client`). On those
+  routes two Authorization headers, one over 16 KB, or more than 1000 headers get 400. The open
+  OAuth endpoints are not limited. A third-party auth token (Cognito-style access tokens carry a
+  top-level `client_id`) would be refused on every project; none is accepted here, since each
+  project's PostgREST and GoTrue verify only the project's own JWT secret
+  (`PGRST_JWT_SECRET`/`GOTRUE_JWT_SECRET` in project-compose.yaml).
+  The Realtime websocket carries its token inside the socket, out of Kong's reach.
 - **Kong config ownership** (`apps/control-plane/src/kong.ts`). The control plane renders the
   whole declarative config from the registry on every change (every project that has a Coolify
   service and is not `DELETING`), refuses to render values that do not look right (ref,

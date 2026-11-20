@@ -1,0 +1,164 @@
+/**
+ * oauthClientScope (src/kong.ts) through a real kong/kong:3.9.1 with the config renderKongConfig
+ * renders, against a throwaway Supabase project: not part of `npm test`, run by hand.
+ *
+ * Setup (all local, containers named fin295-*):
+ * 1. The throwaway stack of Krowli/finance-pit38-zg, scripts/e2e/scoped-keys/stack.sh up
+ *    (GoTrue v2.196.0 with the OAuth server, PostgREST, Storage, the access-token hook on).
+ *    Its state directory (JWT secret, anon and service keys) is $SCOPED_KEYS_STATE.
+ * 2. node render.mjs: two projects, A (fintwoninefiveaaaaaa) and B (otherprojectbbbbbbbb), both
+ *    routed to that stack (network aliases supabase-<svc>-fin295a/-fin295b on fin295-auth,
+ *    fin295-rest, fin295-storage), host suffix localtest.me (resolves to 127.0.0.1).
+ * 3. kong/kong:3.9.1 on fin295-net, port 127.0.0.1:59802, with the platform's KONG_PLUGINS and
+ *    KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES=cjson.safe; POST kong.json to its admin /config.
+ * 4. node probe.mjs → ALL PASSED. Against a Kong without the sandbox setting (KONG_PORT=<its port>
+ *    FAIL_CLOSED=1) the rule logs "cjson.safe is not allowed" and still refuses assistant tokens,
+ *    by the payload text; site, anon and the other project's traffic pass as before.
+ */
+import { createHash, randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
+import { join } from 'node:path'
+const S = (process.env.SCOPED_KEYS_STATE ?? join(process.env.TMPDIR ?? '/tmp', 'fin295-state')) + '/'
+const K = new URL('.', import.meta.url).pathname
+const r = (f) => readFileSync(f, 'utf8').trim()
+const A = { base: 'http://fintwoninefiveaaaaaa.localtest.me:59802', anon: r(S + 'anon.jwt') }
+const B = { base: 'http://otherprojectbbbbbbbb.localtest.me:59802', anon: r(K + 'anon-b.jwt') }
+const SERVICE = r(S + 'service.jwt')
+const PORT = process.env.KONG_PORT ?? '59802'
+// FAIL_CLOSED=1: a Kong without KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES=cjson.safe (the rule then reads the payload text).
+const FAIL_CLOSED = process.env.FAIL_CLOSED === '1'
+for (const p of [A, B]) p.base = p.base.replace('59802', PORT)
+let failed = 0
+const check = (name, ok, detail) => { if (!ok) failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(70)} ${detail}`) }
+async function call(p, method, path, { token, body, form, apikey = true, authorization } = {}) {
+  const h = {}
+  if (apikey) h.apikey = p.anon
+  if (token) h.Authorization = `Bearer ${token}`
+  if (authorization) h.Authorization = authorization
+  let payload
+  if (form) { h['Content-Type'] = 'application/x-www-form-urlencoded'; payload = new URLSearchParams(form).toString() }
+  else if (body !== undefined) { h['Content-Type'] = 'application/json'; payload = JSON.stringify(body) }
+  const res = await fetch(p.base + path, { method, headers: h, body: payload, redirect: 'manual' })
+  const text = await res.text(); let json; try { json = JSON.parse(text) } catch {}
+  return { status: res.status, json, text: text.slice(0, 90).replace(/\s+/g, ' '), headers: res.headers }
+}
+const scoped = (x) => x.status === 403 && x.json?.code === 'oauth_client_token_scope'
+
+const email = `kongk-${Date.now()}@example.test`, password = 'Kongk-pass-1!'
+const created = await call(A, 'POST', '/auth/v1/admin/users', { token: SERVICE, body: { email, password, email_confirm: true } })
+const site = (await call(A, 'POST', '/auth/v1/token?grant_type=password', { body: { email, password } })).json
+const reg = (await call(A, 'POST', '/auth/v1/oauth/clients/register', { apikey: false, body: { client_name: 'kongk', redirect_uris: ['http://localhost:9999/cb'], token_endpoint_auth_method: 'none' } })).json
+const v = randomBytes(32).toString('base64url'), c = createHash('sha256').update(v).digest('base64url')
+const az = await call(A, 'GET', '/auth/v1/oauth/authorize?' + new URLSearchParams({ response_type: 'code', client_id: reg.client_id, redirect_uri: 'http://localhost:9999/cb', scope: 'email', code_challenge: c, code_challenge_method: 'S256' }), { apikey: false })
+const id = new URL(az.headers.get('location')).searchParams.get('authorization_id')
+const det = await call(A, 'GET', `/auth/v1/oauth/authorizations/${id}`, { token: site.access_token })
+check('site token: consent details (keyed auth-v1)', det.status === 200, `${det.status}`)
+const cons = await call(A, 'POST', `/auth/v1/oauth/authorizations/${id}/consent`, { token: site.access_token, body: { action: 'approve' } })
+const code = new URL(cons.json.redirect_url).searchParams.get('code')
+const tok = await call(A, 'POST', '/auth/v1/oauth/token', { apikey: false, form: { grant_type: 'authorization_code', code, redirect_uri: 'http://localhost:9999/cb', client_id: reg.client_id, code_verifier: v } })
+check('open /oauth/token (code exchange, no key)', tok.status === 200, `${tok.status}`)
+const oa = tok.json.access_token
+
+console.log('-- assistant token, project A')
+check('GET /auth/v1/user (the MCP check)', (await call(A, 'GET', '/auth/v1/user', { token: oa })).status === 200, '')
+const ui = await call(A, 'GET', '/auth/v1/oauth/userinfo', { token: oa })
+check('GET /auth/v1/oauth/userinfo reaches GoTrue', !scoped(ui), `${ui.status} ${ui.text}`)
+for (const [m, p, b] of [
+  ['PUT', '/auth/v1/user', { password: 'Changed-by-assistant-1!' }],
+  ['PUT', '/auth/v1/user', { email: 'attacker@example.test' }],
+  ['POST', '/auth/v1/factors', { factor_type: 'totp', friendly_name: 'x' }],
+  ['GET', '/auth/v1/reauthenticate'],
+  ['GET', '/auth/v1/user/oauth/grants'],
+  ['GET', `/auth/v1/oauth/authorizations/${id}`],
+  ['POST', '/auth/v1/logout?scope=global'],
+  ['GET', `/rest/v1/users?select=id&id=eq.${created.json.id}`],
+  ['POST', '/rest/v1/rpc/get_fx_stats', {}],
+  ['POST', '/graphql/v1', { query: '{ __typename }' }],
+  ['POST', '/storage/v1/object/list/throwaway', { prefix: 'x' }],
+  ['GET', '/storage/v1/bucket'],
+  ['POST', '/functions/v1/admin-users', {}],
+  ['GET', '/realtime/v1/api/broadcast'],
+]) {
+  const x = await call(A, m, p, { token: oa, body: b })
+  check(`refused by Kong: ${m} ${p.slice(0, 48)}`, scoped(x), `${x.status} ${x.json?.code ?? x.text}`)
+}
+// Any scheme spelling GoTrue accepts ((?i)^bearer), and spacing it does not: the rule reads the JWT itself.
+for (const authorization of [`BEARER ${oa}`, `bearer ${oa}`, `bEaReR ${oa}`, `Bearer\t${oa}`, `Bearer    ${oa}`, oa, `Token ${oa}`]) {
+  const x = await call(A, 'PUT', '/auth/v1/user', { authorization, body: { password: 'Changed-by-assistant-2!' } })
+  check(`refused by Kong: PUT /auth/v1/user with ${JSON.stringify(authorization.slice(0, 8))}…`, scoped(x), `${x.status} ${x.json?.code ?? x.text}`)
+}
+// Two Authorization headers (raw, as two lines), and the same folded into one with a comma.
+function raw(path, headerPairs) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(A.base + path)
+    const req = httpRequest({ host: '127.0.0.1', port: url.port, path: url.pathname, method: 'PUT', headers: [['Host', url.host], ['apikey', A.anon], ['Content-Type', 'application/json'], ...headerPairs].flat() }, (res) => {
+      let body = ''
+      res.on('data', (c) => (body += c))
+      res.on('end', () => { let json; try { json = JSON.parse(body) } catch {} resolve({ status: res.status ?? res.statusCode, json }) })
+    })
+    req.on('error', reject)
+    req.end(JSON.stringify({ password: 'Changed-by-assistant-3!' }))
+  })
+}
+const two = await raw('/auth/v1/user', [['Authorization', `Bearer ${site.access_token}`], ['Authorization', `Bearer ${oa}`]])
+// Kong 3.9.1 itself answers 400 "Bad request" to a second Authorization line before any plugin runs
+// (measured on every route); the rule's own check (a table value) stays as defence in depth.
+check('two Authorization headers: refused with 400 before the upstream', two.status === 400 && (two.json?.code === 'authorization_header_refused' || two.json?.message === 'Bad request'), `${two.status} ${two.json?.code ?? two.json?.message}`)
+const folded = await call(A, 'PUT', '/auth/v1/user', { authorization: `Bearer ${site.access_token}, Bearer ${oa}`, body: { password: 'Changed-by-assistant-3!' } })
+check('both tokens in one header, comma-separated: refused by Kong', scoped(folded), `${folded.status} ${folded.json?.code ?? folded.text}`)
+const big = await call(A, 'PUT', '/auth/v1/user', { authorization: `Bearer ${oa} ${'a'.repeat(17000)}`, body: {} })
+check('an Authorization header over 16 KB: refused', big.status === 400 && big.json?.code === 'authorization_header_refused', `${big.status} ${big.json?.code}`)
+const many = await raw('/auth/v1/user', [...Array.from({ length: 1001 }, (_, i) => [`x-pad-${i}`, '1']), ['Authorization', `Bearer ${oa}`]])
+check('1001 headers before Authorization: refused, not read past', many.status === 400 && many.json?.code === 'authorization_header_refused', `${many.status} ${many.json?.code}`)
+// The assistant token as a lone apikey on storage (no key-auth there): request-transformer copies it into Authorization.
+const lone = await fetch(A.base + '/storage/v1/bucket', { headers: { apikey: oa } })
+check('refused by Kong: the assistant token as a lone apikey on storage', lone.status === 403, `${lone.status}`)
+// An unsigned fake token with client_id: the pre-S4.2 gate (runbook G-B1.6), no OAuth server needed.
+const part = (v) => Buffer.from(JSON.stringify(v)).toString('base64url')
+const fake = `${part({ alg: 'none' })}.${part({ client_id: 'g-b1-probe', role: 'oauth_client' })}.x`
+for (const scheme of ['Bearer', 'BEARER']) {
+  const x = await call(A, 'PUT', '/auth/v1/user', { authorization: `${scheme} ${fake}`, body: { data: {} } })
+  check(`fake unsigned client_id token, ${scheme}: PUT /auth/v1/user refused by Kong`, scoped(x), `${x.status} ${x.json?.code ?? x.text}`)
+}
+const rr = await call(A, 'POST', '/auth/v1/oauth/token', { apikey: false, form: { grant_type: 'refresh_token', refresh_token: tok.json.refresh_token, client_id: reg.client_id } })
+check('open /oauth/token (refresh, no key)', rr.status === 200, `${rr.status}`)
+check('the refreshed assistant token: GET /auth/v1/user', (await call(A, 'GET', '/auth/v1/user', { token: rr.json.access_token })).status === 200, '')
+check('the refreshed assistant token: PUT /auth/v1/user refused', scoped(await call(A, 'PUT', '/auth/v1/user', { token: rr.json.access_token, body: { password: 'X-1-assistant!' } })), '')
+const [h, pl, sig] = oa.split('.')
+const edited = JSON.parse(Buffer.from(pl, 'base64url').toString()); delete edited.client_id; edited.role = 'authenticated'
+const forged = `${h}.${Buffer.from(JSON.stringify(edited)).toString('base64url')}.${sig}`
+const f = await call(A, 'PUT', '/auth/v1/user', { token: forged, body: { password: 'X-forged-1!' } })
+check('claims edited out: Kong lets it pass, GoTrue refuses the signature', f.status === 403 && f.json?.error_code === 'bad_jwt', `${f.status} ${f.json?.error_code}`)
+// A token whose user_metadata carries "client_id" and "role":"oauth_client" is not an assistant token (another account).
+const metaEmail = `kongk-meta-${Date.now()}@example.test`
+const metaUser = await call(A, 'POST', '/auth/v1/admin/users', { token: SERVICE, body: { email: metaEmail, password, email_confirm: true, user_metadata: { client_id: 'abc', role: 'oauth_client' } } })
+const metaSite = (await call(A, 'POST', '/auth/v1/token?grant_type=password', { body: { email: metaEmail, password } })).json.access_token
+const metaPut = await call(A, 'PUT', '/auth/v1/user', { token: metaSite, body: { data: { x: 1 } } })
+if (FAIL_CLOSED) check('fail-closed mode: a site token whose metadata names client_id is refused (documented)', scoped(metaPut), `${metaPut.status}`)
+else check('user_metadata client_id/role does not trigger the rule (PUT /user)', metaPut.status === 200, `${metaPut.status}`)
+await call(A, 'DELETE', `/auth/v1/admin/users/${metaUser.json.id}`, { token: SERVICE })
+
+console.log('-- site session and anon, project A')
+check('site: GET /auth/v1/user', (await call(A, 'GET', '/auth/v1/user', { token: site.access_token })).status === 200, '')
+check('site: PUT /auth/v1/user {data}', (await call(A, 'PUT', '/auth/v1/user', { token: site.access_token, body: { data: { y: 1 } } })).status === 200, '')
+check('site: GET /rest/v1/users own row', (await call(A, 'GET', `/rest/v1/users?select=id&id=eq.${created.json.id}`, { token: site.access_token })).status === 200, '')
+check('site: GET /auth/v1/user/oauth/grants', (await call(A, 'GET', '/auth/v1/user/oauth/grants', { token: site.access_token })).status === 200, '')
+check('site: GET /storage/v1/bucket', (await call(A, 'GET', '/storage/v1/bucket', { token: site.access_token })).status === 200, '')
+check('anon key only: GET /rest/v1/fx_rates', (await call(A, 'GET', '/rest/v1/fx_rates?select=id&limit=1')).status === 200, '')
+check('no key at all: still 401 from key-auth', (await call(A, 'GET', '/rest/v1/fx_rates?select=id', { apikey: false })).status === 401, '')
+check('a non-JWT bearer passes to the upstream', !scoped(await call(A, 'GET', '/rest/v1/fx_rates?select=id', { token: 'not-a-jwt' })), '')
+check('open: discovery document', (await call(A, 'GET', '/.well-known/oauth-authorization-server/auth/v1', { apikey: false })).status === 200, '')
+
+console.log('-- project B (other project) unchanged')
+const siteB = (await call(B, 'POST', '/auth/v1/token?grant_type=password', { body: { email, password } })).json
+check('B site: sign-in', !!siteB.access_token, '')
+check('B site: GET /auth/v1/user', (await call(B, 'GET', '/auth/v1/user', { token: siteB.access_token })).status === 200, '')
+check('B site: PUT /auth/v1/user {data}', (await call(B, 'PUT', '/auth/v1/user', { token: siteB.access_token, body: { data: { z: 1 } } })).status === 200, '')
+check('B anon: GET /rest/v1/fx_rates', (await call(B, 'GET', '/rest/v1/fx_rates?select=id&limit=1')).status === 200, '')
+check("B: project A's anon key is refused (keys stay per project)", (await call({ ...B, anon: A.anon }, 'GET', '/rest/v1/fx_rates?select=id')).status >= 401, '')
+check('B: an assistant token is limited there too', scoped(await call(B, 'PUT', '/auth/v1/user', { token: oa, body: { data: { q: 1 } } })), '')
+
+await call(A, 'DELETE', `/auth/v1/admin/users/${created.json.id}`, { token: SERVICE })
+console.log(failed ? `${failed} FAILED` : 'ALL PASSED')
+process.exit(failed ? 1 : 0)

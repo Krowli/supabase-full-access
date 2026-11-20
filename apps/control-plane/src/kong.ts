@@ -54,6 +54,89 @@ export type KongConfig = {
 const AUTH_EXPR =
   "$((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or headers.apikey)"
 
+/**
+ * A token GoTrue's OAuth server issued to a third-party client (an AI assistant signed in through
+ * a project's OAuth 2.1 server) carries a top-level `client_id`, and `role: oauth_client` once the
+ * project's access-token hook (podatekgieldy migration 132) is on. GoTrue itself does not limit
+ * what such a token does on its own user endpoints: with it a client could change the person's
+ * password or e-mail, enrol a second factor, or sign every session out. This rule lets such a
+ * token reach only what an assistant needs, `GET /auth/v1/user` (the MCP checks the token there)
+ * and `/auth/v1/oauth/userinfo`, and answers every other keyed route 403. Every other token,
+ * missing or not a JWT, passes unchanged: GoTrue, PostgREST and Storage still decide on it.
+ *
+ * The payload is read without checking the signature. That is safe for a refusal: a client that
+ * edits the claims away breaks the signature, and the upstream refuses the token.
+ * Every word of the Authorization header that is a whole JWT is read, whatever the scheme says:
+ * GoTrue accepts `(?i)^bearer `, so `BEARER <token>` must not slip past a `Bearer` pattern. It is
+ * the only header GoTrue, PostgREST and Storage take a user's token from; on storage-v1, with no
+ * key-auth, request-transformer has already copied a lone `apikey` into it. A request with two
+ * Authorization headers, one over 16 KB, or more headers than the 1000 read (which could hide the
+ * Authorization header from the rule), gets 400 (`authorization_header_refused`) on these routes. The header is split into words first and each word matched anchored: an unanchored
+ * search took about 300 ms per request on 8 KB of letters (measured on kong/kong:3.9.1), and
+ * storage-v1 and functions-v1 need no key.
+ * A third-party auth token (Cognito-style) with a top-level `client_id` would be refused too; no
+ * project on this platform accepts one (PGRST_JWT_SECRET is the project's own secret).
+ * Only the top-level `client_id` and `role` count, decoded with cjson.safe, so nothing in
+ * `user_metadata` triggers the rule. cjson.safe must be in KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES;
+ * without it the rule fails closed: it logs and refuses any JWT whose payload text mentions
+ * `client_id` or `oauth_client` (a site session with such a word in its metadata included).
+ */
+const OAUTH_CLIENT_SCOPE_LUA = (allowed: string) => `local headers, truncated = kong.request.get_headers(1000)
+if truncated then
+  return kong.response.exit(400, { code = "authorization_header_refused", message = "Too many request headers." })
+end
+local auth = headers["authorization"]
+if type(auth) == "table" then
+  return kong.response.exit(400, { code = "authorization_header_refused", message = "Send one Authorization header." })
+end
+if auth then
+  if #auth > 16384 then
+    return kong.response.exit(400, { code = "authorization_header_refused", message = "The Authorization header is over 16 KB." })
+  end
+  local ok, cjson = pcall(require, "cjson.safe")
+  if not ok then
+    kong.log.err("oauth client scope: cjson.safe is not allowed (KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES): refusing every JWT that mentions client_id or oauth_client")
+  end
+  local assistant = false
+  -- Every word of the header that is a whole JWT, whatever the scheme's case or spacing: GoTrue
+  -- takes (?i)^bearer, PostgREST and Storage a bearer of their own. Split first, then one anchored
+  -- match per word: an unanchored search would cost O(n^2) on a long word without dots.
+  for word in auth:gmatch("[^%s,]+") do
+    local payload = word:match("^[%w%-_]+%.([%w%-_]+)%.[%w%-_]+$")
+    if payload then
+      local b64 = payload:gsub("%-", "+"):gsub("_", "/")
+      local text = ngx.decode_base64(b64 .. string.rep("=", (4 - #b64 % 4) % 4))
+      if text then
+        if ok then
+          local claims = cjson.decode(text)
+          if type(claims) == "table" then
+            local client = claims.client_id
+            if (client ~= nil and client ~= cjson.null and client ~= "") or claims.role == "oauth_client" then
+              assistant = true
+            end
+          end
+        elseif text:find("client_id", 1, true) or text:find("oauth_client", 1, true) then
+          assistant = true
+        end
+      end
+    end
+  end
+  if assistant then
+${allowed}    return kong.response.exit(403, { code = "oauth_client_token_scope", message = "This token was issued to an OAuth client: it opens only GET /auth/v1/user and /auth/v1/oauth/userinfo." })
+  end
+end`
+
+/** What an OAuth client's token may still reach on auth-v1. */
+const OAUTH_CLIENT_AUTH_ALLOWED = `    local method, path = kong.request.get_method(), kong.request.get_path()
+    if (method == "GET" and path:match("^/auth/v1/user/?$")) or path:match("^/auth/v1/oauth/userinfo/?$") then
+      return
+    end
+`
+
+/** The rule above, as the post-function's first access chunk. */
+export const oauthClientScope = (opts: { authRoute?: boolean } = {}) =>
+  OAUTH_CLIENT_SCOPE_LUA(opts.authRoute ? OAUTH_CLIENT_AUTH_ALLOWED : '')
+
 const REF = /^[a-z]{20}$/
 const UUID = /^[a-z0-9]+$/
 const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
@@ -170,7 +253,12 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
     ]) {
       add(name, auth + path, `/auth/v1${path}`, [cors])
     }
-    add('auth-v1', `${auth}/`, '/auth/v1/', [cors, ...keyAuth, authHeader])
+    // An OAuth client's token: only GET /user and /oauth/userinfo here (oauthClientScope).
+    const scoped = (authRoute = false): Plugin => ({
+      name: 'post-function',
+      config: { access: [oauthClientScope({ authRoute })] },
+    })
+    add('auth-v1', `${auth}/`, '/auth/v1/', [cors, ...keyAuth, authHeader, scoped(true)])
     add(
       'well-known-oauth',
       `${auth}/.well-known/oauth-authorization-server`,
@@ -186,7 +274,7 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
       [cors]
     )
 
-    add('rest-v1', `${rest}/`, '/rest/v1/', [cors, ...keyAuth, authHeader])
+    add('rest-v1', `${rest}/`, '/rest/v1/', [cors, ...keyAuth, authHeader, scoped()])
     add('graphql-v1', `${rest}/rpc/graphql`, '/graphql/v1', [
       cors,
       ...keyAuth,
@@ -197,6 +285,7 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
           replace: { headers: [`Authorization: ${AUTH_EXPR}`] },
         },
       },
+      scoped(),
     ])
 
     // Realtime picks the tenant from the Host header's first label, so the host is preserved.
@@ -225,7 +314,7 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
       'realtime-v1-rest',
       `${realtime}/api`,
       '/realtime/v1/api',
-      [cors, ...keyAuth, authHeader],
+      [cors, ...keyAuth, authHeader, scoped()],
       keepHost
     )
 
@@ -241,6 +330,7 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
           name: 'post-function',
           config: {
             access: [
+              oauthClientScope(),
               'local auth = kong.request.get_header("authorization")\nif auth == nil or auth == "" or auth:find("^%s*$") then\n  kong.service.request.clear_header("authorization")\nend',
             ],
           },
@@ -255,7 +345,7 @@ export function renderKongConfig(projects: GatewayProject[], opts: KongRenderOpt
     // Edge Functions check the JWT themselves (verify_jwt per function, in the router) and answer
     // CORS themselves, as on the platform: no key-auth or cors plugin. A request may run 150 s.
     if (p.functions)
-      add('functions-v1', `${functions}/`, '/functions/v1/', [], {
+      add('functions-v1', `${functions}/`, '/functions/v1/', [scoped()], {
         service: { connect_timeout: 10_000, read_timeout: 150_000, write_timeout: 150_000 },
       })
   }
