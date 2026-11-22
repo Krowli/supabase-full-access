@@ -73,6 +73,8 @@ services:
       - KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES=cjson.safe
       - 'KONG_DNS_ORDER=LAST,A,CNAME'
       - KONG_DNS_NOT_FOUND_TTL=1
+      # Docker DNS answers TTL 600; a restarted project gets a new IP: re-resolve every 10 s, not up to 10 min of 502.
+      - KONG_DNS_VALID_TTL=10
       - KONG_NGINX_WORKER_PROCESSES=2
       - KONG_MEM_CACHE_SIZE=32m
       - KONG_NGINX_PROXY_PROXY_BUFFER_SIZE=160k
